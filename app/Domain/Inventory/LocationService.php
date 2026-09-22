@@ -58,7 +58,17 @@ final class LocationService
             if (array_key_exists($field, $input)) $record[$field] = trim((string) $input[$field]);
         }
         if (array_key_exists('type', $input)) $record['type'] = strtolower(trim((string) $input['type']));
-        if (array_key_exists('status', $input)) $record['status'] = strtolower(trim((string) $input['status']));
+        if (array_key_exists('status', $input)) {
+            $nextStatus = strtolower(trim((string) $input['status']));
+            if ($nextStatus !== 'active' && ($record['status'] ?? '') === 'active') {
+                $stock = new StockService($this->store);
+                $held = $stock->location($id)['stock'];
+                if ($held !== []) {
+                    throw new InvalidArgumentException('Move all stock out before deactivating location');
+                }
+            }
+            $record['status'] = $nextStatus;
+        }
         if (array_key_exists('parent_id', $input)) {
             $parentId = $this->normalizeParent($input['parent_id']);
             if ($parentId === $id) throw new InvalidArgumentException('Location cannot be its own parent');
