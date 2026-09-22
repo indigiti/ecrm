@@ -36,6 +36,15 @@ final class SettingsService
             }
         }
 
+        foreach (['quote_prefix','invoice_prefix','payment_prefix'] as $field) {
+            if (!array_key_exists($field, $input)) continue;
+            $value = strtoupper(trim((string) $input[$field]));
+            if (!preg_match('/^[A-Z0-9][A-Z0-9-]{0,11}$/', $value)) {
+                throw new InvalidArgumentException('Invalid ' . str_replace('_', ' ', $field));
+            }
+            $record[$field] = $value;
+        }
+
         if (array_key_exists('financial_year_start_month', $input)) {
             $month = (int) $input['financial_year_start_month'];
             if ($month < 1 || $month > 12) throw new InvalidArgumentException('Financial year start month must be between 1 and 12');
