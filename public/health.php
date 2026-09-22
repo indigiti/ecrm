@@ -30,15 +30,17 @@ if (is_file($manifestPath)) {
     }
 }
 $checks['frontend'] = $frontend;
+$storageOk = true;
 foreach (['data', 'indexes', 'uploads', 'audit', 'users', 'config', 'jobs', 'locks', 'backups', 'sessions'] as $name) {
     $path = rtrim($private, '/') . '/' . $name;
     if (!is_dir($path)) {
         @mkdir($path, 0770, true);
     }
     $checks[$name] = is_dir($path) && is_readable($path) && is_writable($path) ? 'ok' : 'attention';
+    if ($checks[$name] !== 'ok') $storageOk = false;
 }
 
-$status = count(array_filter($checks, static fn(string $value): bool => $value !== 'ok')) === 0 ? 'ok' : 'attention';
+$status = (($frontend['ok'] ?? false) && $storageOk) ? 'ok' : 'attention';
 http_response_code($status === 'ok' ? 200 : 503);
 
 echo json_encode([
