@@ -97,6 +97,69 @@ final class SearchRebuilder
             ];
         }
 
+        foreach ($this->store->all('products') as $row) {
+            $entries[] = [
+                'type' => 'product',
+                'id' => $row['id'],
+                'label' => $row['name'],
+                'terms' => [
+                    $row['code'] ?? '',
+                    $row['sku'] ?? '',
+                    $row['category'] ?? '',
+                    $row['subcategory'] ?? '',
+                    $row['brand'] ?? '',
+                    $row['model'] ?? '',
+                    $row['description'] ?? '',
+                    $row['hsn_sac'] ?? '',
+                ],
+                'meta' => [
+                    'code' => $row['code'] ?? null,
+                    'status' => $row['status'] ?? null,
+                    'selling_price_paise' => $row['selling_price_paise'] ?? 0,
+                ],
+            ];
+        }
+
+        foreach ($this->store->all('quotations') as $row) {
+            $entries[] = [
+                'type' => 'quotation',
+                'id' => $row['id'],
+                'label' => $row['number'],
+                'terms' => [
+                    $row['customer_snapshot']['name'] ?? '',
+                    $row['customer_snapshot']['mobile'] ?? '',
+                    $row['customer_snapshot']['gstin'] ?? '',
+                    $row['status'] ?? '',
+                ],
+                'meta' => [
+                    'number' => $row['number'] ?? null,
+                    'status' => $row['status'] ?? null,
+                    'customer_id' => $row['customer_id'] ?? null,
+                    'grand_total_paise' => $row['totals']['grand_total_paise'] ?? 0,
+                ],
+            ];
+        }
+
+        foreach ($this->store->all('invoices') as $row) {
+            $entries[] = [
+                'type' => 'invoice',
+                'id' => $row['id'],
+                'label' => $row['number'],
+                'terms' => [
+                    $row['customer_snapshot']['name'] ?? '',
+                    $row['customer_snapshot']['mobile'] ?? '',
+                    $row['customer_snapshot']['gstin'] ?? '',
+                    $row['status'] ?? '',
+                ],
+                'meta' => [
+                    'number' => $row['number'] ?? null,
+                    'status' => $row['status'] ?? null,
+                    'customer_id' => $row['customer_id'] ?? null,
+                    'grand_total_paise' => $row['totals']['grand_total_paise'] ?? 0,
+                ],
+            ];
+        }
+
         $count = $this->index->replaceAll($entries);
 
         return [
@@ -105,6 +168,9 @@ final class SearchRebuilder
             'contacts' => count($this->store->all('contacts')),
             'addresses' => count($this->store->all('addresses')),
             'leads' => count($this->store->all('leads')),
+            'products' => count($this->store->all('products')),
+            'quotations' => count($this->store->all('quotations')),
+            'invoices' => count($this->store->all('invoices')),
         ];
     }
 }
