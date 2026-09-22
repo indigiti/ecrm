@@ -48,6 +48,15 @@ final class MovementService
             $to = $original['from_location_id'] ?? null;
             $quantityMilli = (int) ($original['quantity_milli'] ?? 0);
 
+            $unitId = $original['product_unit_id'] ?? null;
+            if ($unitId) {
+                $position = (new StockService($this->store))->unitPosition((string) $unitId);
+                $currentLocation = $position['location_id'] ?? null;
+                if ($currentLocation !== $from) {
+                    throw new InvalidArgumentException('Serialized unit moved after original movement; reverse later movements first');
+                }
+            }
+
             if ($from !== null) {
                 $available = $this->balanceMilli((string) $original['product_id'], (string) $from);
                 if ($available < $quantityMilli) {
@@ -125,14 +134,36 @@ final class MovementService
         }
 
         $unitId = trim((string) ($input['product_unit_id'] ?? ''));
+        $serialized = (bool) ($product['serial_tracking'] ?? false);
+
+        if ($serialized && $unitId === '') {
+            throw new InvalidArgumentException('Serialized product movement requires a product unit');
+        }
+        if (!$serialized && $unitId !== '') {
+            throw new InvalidArgumentException('Product is not configured for serialized tracking');
+        }
+
         if ($unitId !== '') {
             $unit = $this->store->get('product_units', $unitId);
             if (!$unit) throw new InvalidArgumentException('Serialized product unit not found');
             if (($unit['product_id'] ?? null) !== $productId) {
                 throw new InvalidArgumentException('Serialized unit does not belong to product');
             }
+            if (($unit['lifecycle_status'] ?? '') !== 'active') {
+                throw new InvalidArgumentException('Serialized unit is not active');
+            }
             if ($quantityMilli !== 1000) {
                 throw new InvalidArgumentException('Serialized unit movement quantity must be 1');
+            }
+
+            $position = (new StockService($this->store))->unitPosition($unitId);
+            $currentLocation = $position['location_id'] ?? null;
+
+            if ($from !== null && $currentLocation !== $from) {
+                throw new InvalidArgumentException('Serialized unit is not at source location');
+            }
+            if ($from === null && $currentLocation !== null) {
+                throw new InvalidArgumentException('Serialized unit is already in stock');
             }
         }
 
