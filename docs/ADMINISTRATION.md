@@ -65,6 +65,23 @@ Logo and signature files remain in private document storage and are served only 
 - Search indexing and deterministic search rebuild
 - Integrity verification for private file existence, checksum and linked entity references
 
+## Backup and Verification
+
+The System settings tab provides **Backup Now** and **Verify** controls for Admin and Manager roles.
+
+Each snapshot:
+
+- is written under persistent private `backups/`
+- stages into a temporary directory and is atomically published
+- includes business data, search indexes, uploads, audit records, users, company configuration and job state
+- excludes sessions, locks and the backup directory itself
+- records every copied file's byte size and SHA-256 checksum in `MANIFEST.json`
+- must pass the application's logical integrity verifier before publication
+- can be re-verified later to detect missing, changed or corrupted files
+- records backup creation and verification in the audit ledger
+
+Restore is intentionally not exposed as an in-app one-click operation in this release. DigiOps code rollback remains separate from business-data recovery, preventing a deployment rollback from silently rewinding live CRM data.
+
 ## Deployment Persistence
 
 DigiOps release metadata preserves:
