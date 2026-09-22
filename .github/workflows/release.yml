@@ -16,8 +16,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: find app public -name '*.php' -print0 | xargs -0 -n1 php -l
+      - run: find app public tests tools -name '*.php' -print0 | xargs -0 -n1 php -l
       - run: composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+      - run: php tests/phase2-smoke.php
       - run: npm install
       - run: npm run build
       - run: php tools/package-release.php
