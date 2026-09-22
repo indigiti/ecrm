@@ -174,7 +174,17 @@ try {
 
     $summary = $receivables->invoiceSummary($invoice2['id']);
     expectFinance($summary['allocated_paise'] === 30000, 'Invoice 2 allocated amount after reversal incorrect');
+    expectFinance($summary['paid_paise'] === 30000, 'Invoice 2 paid amount after reversal incorrect');
     expectFinance($summary['outstanding_paise'] === 29000, 'Invoice 2 outstanding after reversal incorrect');
+    expectFinance($summary['pending_paise'] === 29000, 'Invoice 2 pending amount after reversal incorrect');
+    expectFinance($summary['payment_count'] === 1, 'Invoice 2 applied payment count should exclude fully reversed receipt');
+    expectFinance(count($summary['payments']) === 1, 'Invoice 2 payment detail count incorrect');
+    expectFinance($summary['payments'][0]['payment_id'] === $payment1['id'], 'Invoice 2 active payment detail points to wrong receipt');
+    expectFinance($summary['payments'][0]['payment_number'] === $payment1['number'], 'Invoice 2 payment receipt number missing');
+    expectFinance($summary['payments'][0]['method'] === 'neft', 'Invoice 2 payment method missing');
+    expectFinance($summary['payments'][0]['reference'] === 'UTR-ONE', 'Invoice 2 payment reference missing');
+    expectFinance($summary['payments'][0]['allocated_paise'] === 30000, 'Invoice 2 payment applied amount incorrect');
+    expectFinance(!empty($summary['last_payment_at']), 'Invoice 2 last payment date missing');
 
     $statement = $receivables->customerStatement($customer['id']);
     expectFinance(count($statement['entries']) === 6, 'Statement should contain three invoices and three payments');
