@@ -28,18 +28,24 @@ final class LeadService
             throw new InvalidArgumentException('Lead name is required');
         }
 
+        $email = trim((string) ($input['email'] ?? ''));
+        if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new InvalidArgumentException('Invalid email address');
+        }
+
         $record = [
             'id' => UuidV7::generate(),
             'number' => $this->sequence->next('leads', 'LEAD-'),
             'name' => $name,
             'company' => trim((string) ($input['company'] ?? '')),
             'mobile' => trim((string) ($input['mobile'] ?? '')),
-            'email' => trim((string) ($input['email'] ?? '')),
+            'email' => $email,
             'source' => trim((string) ($input['source'] ?? '')),
             'requirement' => trim((string) ($input['requirement'] ?? '')),
             'customer_id' => $input['customer_id'] ?? null,
             'stage' => 'new',
-            'value' => (float) ($input['value'] ?? 0),
+            'value' => max(0, (float) ($input['value'] ?? 0)),
+            'converted_at' => null,
             'created_at' => gmdate(DATE_ATOM),
             'updated_at' => gmdate(DATE_ATOM),
         ];
@@ -50,6 +56,15 @@ final class LeadService
         return $record;
     }
 
+    public function get(string $id): array
+    {
+        $record = $this->store->get('leads', $id);
+        if (!$record) {
+            throw new InvalidArgumentException('Lead not found');
+        }
+        return $record;
+    }
+
     public function changeStage(string $id, string $stage): array
     {
         $stage = strtolower(trim($stage));
@@ -57,16 +72,32 @@ final class LeadService
             throw new InvalidArgumentException('Invalid lead stage');
         }
 
-        $record = $this->store->get('leads', $id);
-        if (!$record) {
-            throw new InvalidArgumentException('Lead not found');
-        }
-
+        $record = $this->get($id);
         $record['stage'] = $stage;
         $record['updated_at'] = gmdate(DATE_ATOM);
         $this->store->put('leads', $id, $record);
         $this->index($record);
         $this->audit->append('lead.stage_changed', 'lead', $id, ['stage' => $stage]);
+        return $record;
+    }
+
+    public function linkCustomer(string $id, string $customerId): array
+    {
+        $record = $this->get($id);
+        if (!empty($record['customer_id'])) {
+            if ($record['customer_id'] === $customerId) {
+                return $record;
+            }
+            throw new InvalidArgumentException('Lead is already linked to a customer');
+        }
+
+        $record['customer_id'] = $customerId;
+        $record['stage'] = 'won';
+        $record['converted_at'] = gmdate(DATE_ATOM);
+        $record['updated_at'] = gmdate(DATE_ATOM);
+        $this->store->put('leads', $id, $record);
+        $this->index($record);
+        $this->audit->append('lead.converted', 'lead', $id, ['customer_id' => $customerId]);
         return $record;
     }
 
@@ -80,6 +111,6 @@ final class LeadService
         $this->search->upsert('lead', $record['id'], $record['name'], [
             $record['number'], $record['company'], $record['mobile'], $record['email'],
             $record['source'], $record['requirement'], $record['stage']
-        ], ['number' => $record['number'], 'stage' => $record['stage']]);
+        ], ['number' => $record['number'], 'stage' => $record['stage'], 'customer_id' => $record['customer_id']]);
     }
 }
