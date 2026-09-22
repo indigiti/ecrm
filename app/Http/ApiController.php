@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace Ecrm\Http;
 
 use Ecrm\Audit\AuditLedger;
+use Ecrm\Domain\Admin\SettingsService;
+use Ecrm\Domain\Admin\UserService;
 use Ecrm\Domain\CRM\ActivityService;
 use Ecrm\Domain\CRM\GeocodingQueue;
 use Ecrm\Domain\CRM\LeadConversionService;
@@ -14,6 +16,7 @@ use Ecrm\Domain\Customers\CustomerService;
 use Ecrm\Domain\Finance\AllocationService;
 use Ecrm\Domain\Finance\PaymentBatchService;
 use Ecrm\Domain\Finance\PaymentService;
+use Ecrm\Domain\Documents\DocumentService;
 use Ecrm\Domain\Finance\ReceivablesService;
 use Ecrm\Domain\Inventory\LocationService;
 use Ecrm\Domain\Inventory\MovementService;
@@ -26,6 +29,7 @@ use Ecrm\Domain\Sales\QuotationService;
 use Ecrm\Domain\Sales\SalesCalculator;
 use Ecrm\Domain\Workshop\WorkshopJobService;
 use Ecrm\Search\SearchIndex;
+use Ecrm\Security\SessionAuth;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\Runtime;
 use Ecrm\Support\Sequence;
@@ -35,6 +39,10 @@ use Throwable;
 final class ApiController
 {
     private AtomicJsonStore $store;
+    private SessionAuth $auth;
+    private UserService $users;
+    private SettingsService $settings;
+    private DocumentService $documents;
     private CustomerService $customers;
     private ContactService $contacts;
     private AddressService $addresses;
@@ -65,6 +73,12 @@ final class ApiController
         $geocoding = new GeocodingQueue(Runtime::jobsRoot());
         $calculator = new SalesCalculator();
         $locks = Runtime::locksRoot();
+
+        $this->auth = new SessionAuth();
+        $this->auth->start();
+        $this->users = new UserService(new AtomicJsonStore(Runtime::usersRoot()), $audit);
+        $this->settings = new SettingsService(new AtomicJsonStore(Runtime::configRoot()), $audit);
+        $this->documents = new DocumentService($this->store, $this->search, $audit, Runtime::uploadsRoot());
 
         $this->customers = new CustomerService($this->store, $sequence, $this->search, $audit);
         $this->contacts = new ContactService($this->store, $this->search, $audit);
@@ -102,6 +116,97 @@ final class ApiController
             $route = trim(substr($path, $position + strlen($marker)), '/');
             $segments = $route === '' ? [] : explode('/', $route);
             $input = $this->input();
+
+            if ($segments === ['auth', 'status'] && $method === 'GET') {
+                $currentUser = $this->currentUser();
+                $this->json([
+                    'setup_required' => $this->users->count() === 0,
+                    'authenticated' => $currentUser !== null,
+                    'user' => $currentUser,
+                    'csrf_token' => $currentUser ? $this->auth->csrfToken() : null,
+                ]);
+                return;
+            }
+
+            if ($segments === ['auth', 'setup'] && $method === 'POST') {
+                $user = $this->users->createFirstAdmin($input);
+                $this->auth->login((string) $user['id']);
+                $this->json([
+                    'data' => $user,
+                    'csrf_token' => $this->auth->csrfToken(),
+                ], 201);
+                return;
+            }
+
+            if ($segments === ['auth', 'login'] && $method === 'POST') {
+                $user = $this->users->authenticate(
+                    (string) ($input['email'] ?? ''),
+                    (string) ($input['password'] ?? '')
+                );
+                if ($user === null) {
+                    $this->json(['error' => 'Invalid email or password'], 401);
+                    return;
+                }
+                $this->auth->login((string) $user['id']);
+                $this->json([
+                    'data' => $user,
+                    'csrf_token' => $this->auth->csrfToken(),
+                ]);
+                return;
+            }
+
+            if ($this->users->count() === 0) {
+                $this->json(['error' => 'Initial admin setup is required', 'setup_required' => true], 428);
+                return;
+            }
+
+            $currentUser = $this->currentUser();
+            if ($currentUser === null) {
+                $this->json(['error' => 'Authentication required'], 401);
+                return;
+            }
+
+            if (!in_array($method, ['GET','HEAD','OPTIONS'], true)
+                && !$this->auth->verifyCsrf($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null)) {
+                $this->json(['error' => 'Invalid CSRF token'], 403);
+                return;
+            }
+
+            if (($currentUser['role'] ?? '') === 'read_only' && !in_array($method, ['GET','HEAD','OPTIONS'], true)) {
+                $this->json(['error' => 'Read-only user cannot modify data'], 403);
+                return;
+            }
+
+            if ($segments === ['auth', 'me'] && $method === 'GET') {
+                $this->json([
+                    'data' => $currentUser,
+                    'csrf_token' => $this->auth->csrfToken(),
+                ]);
+                return;
+            }
+
+            if ($segments === ['auth', 'logout'] && $method === 'POST') {
+                $this->auth->logout();
+                $this->json(['status' => 'ok']);
+                return;
+            }
+
+            if ($segments === ['auth', 'password'] && $method === 'POST') {
+                $verified = $this->users->authenticate(
+                    (string) $currentUser['email'],
+                    (string) ($input['current_password'] ?? '')
+                );
+                if ($verified === null) {
+                    $this->json(['error' => 'Current password is incorrect'], 422);
+                    return;
+                }
+                $user = $this->users->changePassword(
+                    (string) $currentUser['id'],
+                    (string) ($input['new_password'] ?? '')
+                );
+                $this->json(['data' => $user]);
+                return;
+            }
 
             if ($segments === ['dashboard'] && $method === 'GET') {
                 $activities = $this->activities->all();
@@ -601,6 +706,84 @@ final class ApiController
                 return;
             }
 
+            if ($segments === ['users']) {
+                $this->requireRoles($currentUser, ['admin']);
+                if ($method === 'GET') {
+                    $this->json(['data' => $this->users->all(), 'roles' => UserService::ROLES]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->users->create($input)], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'users' && isset($segments[1])) {
+                $this->requireRoles($currentUser, ['admin']);
+                if (count($segments) === 2 && $method === 'GET') {
+                    $this->json(['data' => $this->users->get($segments[1])]);
+                    return;
+                }
+                if (count($segments) === 2 && in_array($method, ['PUT','PATCH'], true)) {
+                    $this->json(['data' => $this->users->update($segments[1], $input)]);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'password' && $method === 'POST') {
+                    $this->json(['data' => $this->users->changePassword(
+                        $segments[1],
+                        (string) ($input['password'] ?? '')
+                    )]);
+                    return;
+                }
+            }
+
+            if ($segments === ['settings']) {
+                if ($method === 'GET') {
+                    $this->json(['data' => $this->settings->get()]);
+                    return;
+                }
+                if (in_array($method, ['PUT','PATCH'], true)) {
+                    $this->requireRoles($currentUser, ['admin','manager']);
+                    $this->json(['data' => $this->settings->update($input)]);
+                    return;
+                }
+            }
+
+            if ($segments === ['documents']) {
+                if ($method === 'GET') {
+                    $entityType = isset($_GET['entity_type']) && $_GET['entity_type'] !== '' ? (string) $_GET['entity_type'] : null;
+                    $entityId = isset($_GET['entity_id']) && $_GET['entity_id'] !== '' ? (string) $_GET['entity_id'] : null;
+                    $this->json(['data' => $this->documents->all($entityType, $entityId)]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $file = $_FILES['file'] ?? null;
+                    if (!is_array($file)) throw new InvalidArgumentException('Document file is required');
+                    $this->json(['data' => $this->documents->upload($file, $input)], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'documents' && isset($segments[1])) {
+                $documentId = $segments[1];
+                if (count($segments) === 2 && $method === 'GET') {
+                    $this->json(['data' => $this->documents->get($documentId)]);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'download' && $method === 'GET') {
+                    $this->downloadDocument($documentId);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'archive' && $method === 'POST') {
+                    $this->requireRoles($currentUser, ['admin','manager']);
+                    $this->json(['data' => $this->documents->archive(
+                        $documentId,
+                        (string) ($input['reason'] ?? '')
+                    )]);
+                    return;
+                }
+            }
+
             if ($segments === ['reports'] && $method === 'GET') {
                 $this->json(['data' => ReportingService::REPORTS]);
                 return;
@@ -632,6 +815,45 @@ final class ApiController
             error_log('eCRM API: ' . $e->getMessage());
             $this->json(['error' => 'Internal application error'], 500);
         }
+    }
+
+    private function currentUser(): ?array
+    {
+        $id = $this->auth->userId();
+        if ($id === null) return null;
+
+        try {
+            $user = $this->users->get($id);
+            if (($user['status'] ?? '') !== 'active') {
+                $this->auth->logout();
+                return null;
+            }
+            return $user;
+        } catch (InvalidArgumentException) {
+            $this->auth->logout();
+            return null;
+        }
+    }
+
+    private function requireRoles(array $user, array $roles): void
+    {
+        if (!$this->users->isAllowed($user, $roles)) {
+            http_response_code(403);
+            throw new InvalidArgumentException('You do not have permission for this action');
+        }
+    }
+
+    private function downloadDocument(string $id): void
+    {
+        $file = $this->documents->file($id);
+        $record = $file['record'];
+        $path = $file['path'];
+
+        header('Content-Type: ' . (string) $record['mime_type']);
+        header('Content-Length: ' . (string) filesize($path));
+        header('Content-Disposition: attachment; filename="' . str_replace('"', '', (string) $record['original_name']) . '"');
+        header('X-Content-Type-Options: nosniff');
+        readfile($path);
     }
 
     private function input(): array
