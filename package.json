@@ -8,7 +8,8 @@
     "build": "vite build"
   },
   "dependencies": {
-    "leaflet": "^1.9.4"
+    "leaflet": "^1.9.4",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "autoprefixer": "latest",
