@@ -42,4 +42,9 @@ final class Runtime
     {
         return self::privateRoot() . '/jobs';
     }
+
+    public static function locksRoot(): string
+    {
+        return self::privateRoot() . '/locks';
+    }
 }
