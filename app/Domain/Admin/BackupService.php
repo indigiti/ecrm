@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace Ecrm\Domain\Admin;
 
 use Ecrm\Audit\AuditLedger;
+use Ecrm\Integrity\IntegrityVerifier;
+use Ecrm\Storage\AtomicJsonStore;
 use RuntimeException;
 use InvalidArgumentException;
 
@@ -44,6 +46,25 @@ final class BackupService
             ksort($manifest['files']);
             $manifest['file_count'] = count($manifest['files']);
             $manifest['total_bytes'] = array_sum(array_column($manifest['files'], 'size_bytes'));
+
+            $integrity = (new IntegrityVerifier(
+                new AtomicJsonStore($tmp . '/data'),
+                $tmp . '/audit',
+                $tmp . '/uploads'
+            ))->verify();
+
+            if (!($integrity['ok'] ?? false)) {
+                throw new RuntimeException(
+                    'Backup snapshot failed integrity verification: '
+                    . implode('; ', $integrity['errors'] ?? ['unknown integrity error'])
+                );
+            }
+
+            $manifest['integrity'] = [
+                'ok' => true,
+                'checked' => $integrity['checked'] ?? [],
+                'verified_at' => gmdate(DATE_ATOM),
+            ];
 
             file_put_contents(
                 $tmp . '/MANIFEST.json',
