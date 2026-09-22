@@ -1,15 +1,16 @@
 {
   "name": "ecrm",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "check": "node tools/check.mjs"
+    "build": "vite build"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4"
   },
   "devDependencies": {
-    "@vitejs/plugin-basic-ssl": "latest",
     "autoprefixer": "latest",
     "postcss": "latest",
     "tailwindcss": "^3.4.17",
