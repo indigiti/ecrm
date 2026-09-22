@@ -29,6 +29,7 @@ jobs:
       - run: php tests/operations-inventory.php
       - run: php tests/workshop.php
       - run: php tests/reports.php
+      - run: php tests/administration.php
       - run: npm install
       - run: npm run build
       - run: php tools/package-release.php
