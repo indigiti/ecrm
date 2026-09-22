@@ -108,12 +108,18 @@ final class SearchIndex
         foreach ($rows as $row) {
             $haystack = (string) ($row['terms'] ?? '');
             $score = 0;
+            $matched = 0;
+
             foreach ($needles as $needle) {
-                if (str_contains($haystack, $needle)) {
-                    $score += str_starts_with($this->normalize((string) ($row['label'] ?? '')), $needle) ? 4 : 1;
+                if (!str_contains($haystack, $needle)) {
+                    continue;
                 }
+
+                $matched++;
+                $score += str_starts_with($this->normalize((string) ($row['label'] ?? '')), $needle) ? 4 : 1;
             }
-            if ($score > 0) {
+
+            if ($matched === count($needles)) {
                 $row['score'] = $score;
                 $matches[] = $row;
             }
