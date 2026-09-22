@@ -5,6 +5,6 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    manifest: true
+    manifest: 'manifest.json'
   }
 });
