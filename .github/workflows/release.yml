@@ -1,0 +1,29 @@
+name: eCRM Release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: find app public -name '*.php' -print0 | xargs -0 -n1 php -l
+      - run: composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+      - run: npm ci
+      - run: npm run build
+      - run: php tools/package-release.php
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ecrm-release
+          path: release/
+          if-no-files-found: error
