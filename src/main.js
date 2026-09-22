@@ -329,10 +329,10 @@ function modal(title, fields, submit) {
     e.preventDefault();
     const payload = Object.fromEntries(new FormData(e.currentTarget).entries());
     try {
-      await submit(payload);
+      const afterSave = await submit(payload);
       root.innerHTML = '';
       toast('Saved');
-      renderView();
+      if (typeof afterSave === 'function') afterSave(); else renderView();
     } catch (err) { toast(err.message,true); }
   };
 }
@@ -356,7 +356,7 @@ function customerEditModal(customer) {
     '<label>Category<input name="category" value="' + esc(customer.category || '') + '"></label><label>Status<select name="status"><option value="active"' + (customer.status === 'active' ? ' selected' : '') + '>Active</option><option value="inactive"' + (customer.status === 'inactive' ? ' selected' : '') + '>Inactive</option><option value="archived"' + (customer.status === 'archived' ? ' selected' : '') + '>Archived</option></select></label>',
     async function(p){
       await api('customers/' + customer.id,{method:'PATCH',body:p});
-      setTimeout(function(){ openCustomer(customer.id); }, 0);
+      return function(){ openCustomer(customer.id); };
     }
   );
 }
@@ -371,7 +371,7 @@ function contactModal(customerId) {
 function contactEditModal(contact) {
   modal('Edit contact',
     '<label class="full">Name<input required name="name" value="' + esc(contact.name) + '"></label><label>Designation<input name="designation" value="' + esc(contact.designation || '') + '"></label><label>Mobile<input name="mobile" value="' + esc(contact.mobile || '') + '"></label><label>Email<input name="email" type="email" value="' + esc(contact.email || '') + '"></label><label>WhatsApp<input name="whatsapp" value="' + esc(contact.whatsapp || '') + '"></label>',
-    async function(p){ await api('contacts/' + contact.id,{method:'PATCH',body:p}); setTimeout(function(){ openCustomer(contact.customer_id); },0); }
+    async function(p){ await api('contacts/' + contact.id,{method:'PATCH',body:p}); return function(){ openCustomer(contact.customer_id); }; }
   );
 }
 
@@ -379,7 +379,7 @@ function addressEditModal(address) {
   modal('Edit address',
     '<label>Type<select name="type">' + ['site','billing','shipping','registered','warehouse','office','other'].map(function(t){ return '<option value="' + t + '"' + (address.type === t ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select></label><label>Label<input name="label" value="' + esc(address.label || '') + '"></label>' +
     '<label class="full">Address<textarea required name="address">' + esc(address.address || '') + '</textarea></label><label>Area<input name="area" value="' + esc(address.area || '') + '"></label><label>City<input name="city" value="' + esc(address.city || '') + '"></label><label>State<input name="state" value="' + esc(address.state || '') + '"></label><label>PIN<input name="pin" value="' + esc(address.pin || '') + '"></label>',
-    async function(p){ await api('addresses/' + address.id,{method:'PATCH',body:p}); setTimeout(function(){ openCustomer(address.customer_id); },0); }
+    async function(p){ await api('addresses/' + address.id,{method:'PATCH',body:p}); return function(){ openCustomer(address.customer_id); }; }
   );
 }
 
