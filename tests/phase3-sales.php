@@ -18,7 +18,6 @@ use Ecrm\Search\SearchIndex;
 use Ecrm\Search\SearchRebuilder;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\Sequence;
-use InvalidArgumentException;
 
 function expectSales(bool $condition, string $message): void
 {
