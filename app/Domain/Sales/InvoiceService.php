@@ -214,7 +214,8 @@ final class InvoiceService
         $address = $source['address'];
         $calculated = $source['calculated'];
         $year = gmdate('Y');
-        $prefix = (string) (($this->settings?->get()['invoice_prefix'] ?? null) ?: 'INV');
+        $settings = $this->settings?->get() ?? [];
+        $prefix = (string) (($settings['invoice_prefix'] ?? null) ?: 'INV');
         $now = gmdate(DATE_ATOM);
 
         $record = [
