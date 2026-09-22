@@ -160,6 +160,50 @@ final class SearchRebuilder
             ];
         }
 
+        foreach ($this->store->all('locations') as $row) {
+            $entries[] = [
+                'type' => 'location',
+                'id' => $row['id'],
+                'label' => $row['name'],
+                'terms' => [
+                    $row['code'] ?? '',
+                    $row['type'] ?? '',
+                    $row['address'] ?? '',
+                    $row['contact_name'] ?? '',
+                    $row['contact_mobile'] ?? '',
+                    $row['status'] ?? '',
+                ],
+                'meta' => [
+                    'code' => $row['code'] ?? null,
+                    'type' => $row['type'] ?? null,
+                    'parent_id' => $row['parent_id'] ?? null,
+                    'status' => $row['status'] ?? null,
+                ],
+            ];
+        }
+
+        foreach ($this->store->all('product_units') as $row) {
+            $product = $this->store->get('products', (string) ($row['product_id'] ?? ''));
+            $entries[] = [
+                'type' => 'product_unit',
+                'id' => $row['id'],
+                'label' => $row['serial_no'],
+                'terms' => [
+                    $product['name'] ?? '',
+                    $product['code'] ?? '',
+                    $product['sku'] ?? '',
+                    $row['batch_no'] ?? '',
+                    $row['qr_token'] ?? '',
+                    $row['lifecycle_status'] ?? '',
+                ],
+                'meta' => [
+                    'product_id' => $row['product_id'] ?? null,
+                    'product_code' => $product['code'] ?? null,
+                    'lifecycle_status' => $row['lifecycle_status'] ?? null,
+                ],
+            ];
+        }
+
         foreach ($this->store->all('payment_batches') as $row) {
             $entries[] = [
                 'type' => 'payment_batch',
@@ -217,6 +261,9 @@ final class SearchRebuilder
             'products' => count($this->store->all('products')),
             'quotations' => count($this->store->all('quotations')),
             'invoices' => count($this->store->all('invoices')),
+            'locations' => count($this->store->all('locations')),
+            'product_units' => count($this->store->all('product_units')),
+            'inventory_movements' => count($this->store->all('inventory_movements')),
             'payment_batches' => count($this->store->all('payment_batches')),
             'payments' => count($this->store->all('payments')),
         ];
