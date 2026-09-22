@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ecrm-${{ github.ref }}
+  group: ecrm-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 jobs:
   build:
