@@ -36,7 +36,8 @@ foreach (glob($results . '/*.json') ?: [] as $path) {
         (string) $payload['address_id'],
         (float) $payload['latitude'],
         (float) $payload['longitude'],
-        isset($payload['confidence']) ? (float) $payload['confidence'] : null
+        isset($payload['confidence']) ? (float) $payload['confidence'] : null,
+        isset($payload['geocode_token']) ? (string) $payload['geocode_token'] : null
     );
 
     $target = $applied . '/' . basename($path);
