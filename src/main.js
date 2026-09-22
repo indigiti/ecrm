@@ -948,7 +948,7 @@ async function openInvoice(id) {
 
     document.querySelector('#back-invoices').onclick = function(){ invoices(w); };
     const printButton = document.querySelector('#print-current');
-    if (printButton) printButton.onclick = function(){ window.print(); };
+    if (printButton) printButton.onclick = function(){ printInvoiceDocument(inv, receivable); };
     const editButton = document.querySelector('#edit-invoice');
     if (editButton) editButton.onclick = function(){ salesDocumentModal('invoice', inv); };
     const invoicePayment = document.querySelector('#invoice-payment');
@@ -964,6 +964,227 @@ async function openInvoice(id) {
     const voidButton = document.querySelector('#void-invoice');
     if (voidButton) voidButton.onclick = function(){ voidInvoiceModal(inv); };
   } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
+
+function printDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+}
+
+function printMoney(value) {
+  return new Intl.NumberFormat('en-IN',{
+    style:'currency',
+    currency:'INR',
+    minimumFractionDigits:2,
+    maximumFractionDigits:2
+  }).format(Number(value || 0) / 100);
+}
+
+function absoluteAppUrl(path) {
+  return new URL(path, window.location.href).href;
+}
+
+function printInvoiceDocument(inv, receivable) {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    toast('Pop-up blocked. Allow pop-ups to print the invoice.', true);
+    return;
+  }
+
+  const company = state.companySettings || {};
+  const customer = inv.customer_snapshot || {};
+  const address = inv.address_snapshot || {};
+  const totals = inv.totals || {};
+  const payments = Array.isArray(receivable.payments) ? receivable.payments : [];
+
+  const companyAddress = [
+    company.address,
+    company.city,
+    company.state,
+    company.pin,
+    company.country
+  ].filter(Boolean).join(', ');
+
+  const customerAddress = [
+    address.address,
+    address.area,
+    address.city,
+    address.state,
+    address.pin,
+    address.country
+  ].filter(Boolean).join(', ');
+
+  const logo = company.logo_document_id
+    ? '<img class="invoice-logo" src="' + esc(absoluteAppUrl('./api/documents/' + encodeURIComponent(company.logo_document_id) + '/content')) + '" alt="Company logo">'
+    : '<div class="invoice-logo-placeholder">' + esc((company.company_name || 'eCRM').slice(0,2).toUpperCase()) + '</div>';
+
+  const signature = company.signature_document_id
+    ? '<img class="signature-image" src="' + esc(absoluteAppUrl('./api/documents/' + encodeURIComponent(company.signature_document_id) + '/content')) + '" alt="Authorized signature">'
+    : '';
+
+  const itemRows = (inv.items || []).map(function(line){
+    const meta = [
+      line.hsn_sac ? 'HSN/SAC ' + line.hsn_sac : '',
+      line.unit || ''
+    ].filter(Boolean).join(' · ');
+
+    return '<tr>' +
+      '<td><b>' + esc(line.description || '') + '</b>' + (meta ? '<small>' + esc(meta) + '</small>' : '') + '</td>' +
+      '<td class="num">' + esc(line.quantity) + '</td>' +
+      '<td class="num">' + printMoney(line.rate_paise) + '</td>' +
+      '<td class="num">' + ((Number(line.discount_bps || 0) / 100).toFixed(2).replace(/\.00$/,'') + '%') + '</td>' +
+      '<td class="num">' + ((Number(line.tax_bps || 0) / 100).toFixed(2).replace(/\.00$/,'') + '%') + '</td>' +
+      '<td class="num strong">' + printMoney(line.line_total_paise) + '</td>' +
+    '</tr>';
+  }).join('');
+
+  const paymentRows = payments.length ? payments.map(function(payment,index){
+    return '<tr>' +
+      '<td>' + (index + 1) + '</td>' +
+      '<td><b>' + esc(payment.payment_number || 'Receipt') + '</b></td>' +
+      '<td>' + esc(printDate(payment.received_at)) + '</td>' +
+      '<td>' + esc(paymentMethodLabel(payment.method || '')) + '</td>' +
+      '<td>' + esc(payment.reference || '—') + '</td>' +
+      '<td class="num strong">' + printMoney(payment.allocated_paise || 0) + '</td>' +
+    '</tr>';
+  }).join('') : '<tr><td colspan="6" class="empty-payment">No payment has been applied to this invoice.</td></tr>';
+
+  const paymentStatus = Number(receivable.pending_paise != null ? receivable.pending_paise : receivable.outstanding_paise || 0) <= 0
+    ? 'PAID'
+    : Number(receivable.paid_paise != null ? receivable.paid_paise : receivable.allocated_paise || 0) > 0
+      ? 'PARTIALLY PAID'
+      : 'UNPAID';
+
+  const taxRows = [
+    ['Taxable', totals.taxable_paise],
+    ['CGST', totals.cgst_paise],
+    ['SGST', totals.sgst_paise],
+    ['IGST', totals.igst_paise],
+    ['Round off', totals.round_off_paise]
+  ].filter(function(row){
+    return row[0] === 'Taxable' || row[0] === 'Round off' || Number(row[1] || 0) !== 0;
+  }).map(function(row){
+    return '<div><span>' + esc(row[0]) + '</span><b>' + printMoney(row[1]) + '</b></div>';
+  }).join('');
+
+  const companyContact = [company.phone, company.email, company.website].filter(Boolean).join(' · ');
+  const customerContact = [customer.mobile, customer.email].filter(Boolean).join(' · ');
+
+  const documentHtml = '<!doctype html><html><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>' + esc(inv.number || 'Invoice') + '</title>' +
+    '<style>' +
+    '@page{size:A4;margin:0}' +
+    '*{box-sizing:border-box}' +
+    'html,body{margin:0;padding:0;background:#d9d9d9;font-family:Inter,Arial,sans-serif;color:#141414;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+    '.page{width:210mm;min-height:297mm;margin:0 auto 10mm;background:#fff;padding:19mm 18mm 22mm;position:relative;overflow:hidden}' +
+    '.page-break{break-before:page;page-break-before:always}' +
+    '.topline{display:flex;justify-content:space-between;align-items:flex-start;gap:20mm}' +
+    '.invoice-logo{width:32mm;height:18mm;object-fit:contain;object-position:left top}' +
+    '.invoice-logo-placeholder{width:22mm;height:16mm;border:1px solid #222;display:grid;place-items:center;font-size:18px;font-weight:800}' +
+    '.invoice-number{text-align:right;font-size:12px;letter-spacing:.16em;text-transform:uppercase}' +
+    '.invoice-number b{display:block;font-size:16px;letter-spacing:.08em;margin-top:3px}' +
+    '.invoice-title{font-size:54px;line-height:.92;letter-spacing:-.055em;margin:22mm 0 12mm;font-weight:900}' +
+    '.invoice-meta{display:flex;gap:8px;align-items:baseline;font-size:13px;margin-bottom:12mm}.invoice-meta b{font-size:14px}' +
+    '.party-grid{display:grid;grid-template-columns:1fr 1fr;gap:18mm;margin-bottom:12mm}' +
+    '.party h3{font-size:13px;margin:0 0 4px}.party p{font-size:12px;line-height:1.5;margin:0;color:#333}.party .name{font-size:15px;color:#111}' +
+    '.party small{display:block;margin-top:4px;font-size:10px;color:#666;line-height:1.4}' +
+    'table{width:100%;border-collapse:collapse}' +
+    '.items thead th,.payments thead th{background:#ececef;padding:9px 8px;text-align:left;font-size:10px;font-weight:500;letter-spacing:.02em}' +
+    '.items td,.payments td{padding:10px 8px;border-bottom:1px solid #ececec;font-size:11px;vertical-align:top}' +
+    '.items td small{display:block;color:#777;margin-top:3px;font-size:9px}' +
+    '.num{text-align:right}.strong{font-weight:800}' +
+    '.total-area{display:grid;grid-template-columns:1fr 72mm;gap:12mm;margin-top:5mm}' +
+    '.notes{font-size:10px;color:#555;line-height:1.5}.notes b{display:block;color:#111;margin-bottom:3px}' +
+    '.tax-box{border-top:2px solid #181818;border-bottom:2px solid #181818;padding:7px 0}' +
+    '.tax-box>div{display:flex;justify-content:space-between;font-size:10px;padding:2px 0}' +
+    '.grand{display:flex;justify-content:space-between;font-size:16px;font-weight:900;padding:8px 0 0}' +
+    '.status-strip{display:flex;gap:10mm;margin-top:9mm;padding:8mm 0;border-top:1px solid #ddd;border-bottom:1px solid #ddd}' +
+    '.status-strip div{flex:1}.status-strip span{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#777}.status-strip b{display:block;margin-top:3px;font-size:17px}' +
+    '.footer-info{display:grid;grid-template-columns:1.3fr 1fr;gap:15mm;margin-top:10mm;font-size:9.5px;line-height:1.55}' +
+    '.footer-info h4{margin:0 0 4px;font-size:10px;text-transform:uppercase;letter-spacing:.08em}' +
+    '.signature{min-height:22mm;text-align:right}.signature-image{height:15mm;max-width:45mm;object-fit:contain}.signature-line{border-top:1px solid #222;margin-top:5px;padding-top:4px}' +
+    '.wave-a,.wave-b{position:absolute;bottom:-38mm;border-radius:50% 50% 0 0;pointer-events:none}' +
+    '.wave-a{left:-35mm;width:145mm;height:58mm;background:#d5d7d8;transform:rotate(7deg)}' +
+    '.wave-b{right:-28mm;width:165mm;height:48mm;background:#4b4e4f;transform:rotate(-6deg)}' +
+    '.page-two .invoice-title{font-size:38px;margin:15mm 0 5mm}.payment-intro{font-size:12px;color:#555;max-width:125mm;line-height:1.5;margin-bottom:10mm}' +
+    '.payment-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:5mm;margin-bottom:11mm}' +
+    '.payment-summary article{border:1px solid #ddd;padding:7mm 6mm;border-radius:4mm}.payment-summary span{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#777}.payment-summary b{display:block;font-size:20px;margin-top:4px}' +
+    '.payments td,.payments th{font-size:10px}.empty-payment{text-align:center;color:#777;padding:18mm 5mm!important}' +
+    '.payment-note{margin-top:8mm;padding:5mm;background:#f5f5f4;font-size:10px;line-height:1.5}' +
+    '.payment-footer{display:grid;grid-template-columns:1fr 1fr;gap:15mm;margin-top:10mm;font-size:10px;line-height:1.55}' +
+    '.payment-footer h4{margin:0 0 4px;text-transform:uppercase;letter-spacing:.07em;font-size:9px}' +
+    '.muted{color:#777}.watermark{position:absolute;right:18mm;top:55mm;font-size:48px;font-weight:900;color:rgba(180,0,0,.08);transform:rotate(-12deg)}' +
+    '@media print{html,body{background:#fff}.page{margin:0;width:210mm;min-height:297mm;box-shadow:none}.no-print{display:none!important}}' +
+    '</style></head><body>' +
+
+    '<section class="page page-one">' +
+      ((inv.status === 'draft' || inv.status === 'void') ? '<div class="watermark">' + esc(inv.status.toUpperCase()) + '</div>' : '') +
+      '<div class="topline"><div>' + logo + '</div><div class="invoice-number">Invoice No.<b>' + esc(inv.number || '') + '</b></div></div>' +
+      '<h1 class="invoice-title">INVOICE</h1>' +
+      '<div class="invoice-meta"><b>Date:</b><span>' + esc(printDate(inv.issued_at || inv.created_at)) + '</span>' +
+        (inv.due_date ? '<span class="muted">· Due ' + esc(printDate(inv.due_date)) + '</span>' : '') + '</div>' +
+      '<div class="party-grid">' +
+        '<div class="party"><h3>Billed to:</h3><p class="name">' + esc(customer.name || '') + '</p><p>' + esc(customerAddress || 'No billing address selected') + '</p>' +
+          (customer.gstin ? '<small>GSTIN: ' + esc(customer.gstin) + '</small>' : '') +
+          (customer.pan ? '<small>PAN: ' + esc(customer.pan) + '</small>' : '') +
+          (customerContact ? '<small>' + esc(customerContact) + '</small>' : '') +
+        '</div>' +
+        '<div class="party"><h3>From:</h3><p class="name">' + esc(company.legal_name || company.company_name || 'eCRM') + '</p><p>' + esc(companyAddress || 'Company address not configured') + '</p>' +
+          (company.gstin ? '<small>GSTIN: ' + esc(company.gstin) + '</small>' : '') +
+          (company.pan ? '<small>PAN: ' + esc(company.pan) + '</small>' : '') +
+          (companyContact ? '<small>' + esc(companyContact) + '</small>' : '') +
+        '</div>' +
+      '</div>' +
+      '<table class="items"><thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Disc.</th><th class="num">Tax</th><th class="num">Amount</th></tr></thead><tbody>' + itemRows + '</tbody></table>' +
+      '<div class="total-area"><div class="notes"><b>Note</b>' + esc(inv.notes || company.footer_text || 'Thank you for your business.') + '</div><div>' +
+        '<div class="tax-box">' + taxRows + '</div><div class="grand"><span>Grand Total</span><span>' + printMoney(totals.grand_total_paise) + '</span></div>' +
+      '</div></div>' +
+      '<div class="status-strip"><div><span>Payment Status</span><b>' + esc(paymentStatus) + '</b></div><div><span>Paid</span><b>' + printMoney(receivable.paid_paise != null ? receivable.paid_paise : receivable.allocated_paise) + '</b></div><div><span>Pending</span><b>' + printMoney(receivable.pending_paise != null ? receivable.pending_paise : receivable.outstanding_paise) + '</b></div></div>' +
+      '<div class="footer-info"><div><h4>Terms</h4><div>' + esc(inv.terms || company.invoice_terms || '—') + '</div>' +
+        ((company.bank_name || company.bank_account_number || company.upi_id) ? '<h4 style="margin-top:8px">Payment Details</h4><div>' +
+          (company.bank_name ? 'Bank: ' + esc(company.bank_name) + '<br>' : '') +
+          (company.bank_account_name ? 'Account Name: ' + esc(company.bank_account_name) + '<br>' : '') +
+          (company.bank_account_number ? 'Account No: ' + esc(company.bank_account_number) + '<br>' : '') +
+          (company.bank_ifsc ? 'IFSC: ' + esc(company.bank_ifsc) + '<br>' : '') +
+          (company.upi_id ? 'UPI: ' + esc(company.upi_id) : '') +
+        '</div>' : '') +
+      '</div><div class="signature">' + signature + '<div class="signature-line">Authorized Signatory<br><b>' + esc(company.company_name || 'eCRM') + '</b></div></div></div>' +
+      '<div class="wave-a"></div><div class="wave-b"></div>' +
+    '</section>' +
+
+    '<section class="page page-two page-break">' +
+      '<div class="topline"><div>' + logo + '</div><div class="invoice-number">Invoice No.<b>' + esc(inv.number || '') + '</b></div></div>' +
+      '<h1 class="invoice-title">PAYMENT DETAILS</h1>' +
+      '<p class="payment-intro">This page forms part of the invoice and shows payments allocated specifically to this invoice. Reversed allocations are excluded from the paid total.</p>' +
+      '<div class="payment-summary">' +
+        '<article><span>Invoice Total</span><b>' + printMoney(receivable.total_paise || totals.grand_total_paise) + '</b></article>' +
+        '<article><span>Total Paid</span><b>' + printMoney(receivable.paid_paise != null ? receivable.paid_paise : receivable.allocated_paise) + '</b></article>' +
+        '<article><span>Pending</span><b>' + printMoney(receivable.pending_paise != null ? receivable.pending_paise : receivable.outstanding_paise) + '</b></article>' +
+      '</div>' +
+      '<table class="payments"><thead><tr><th>#</th><th>Receipt</th><th>Date</th><th>Method</th><th>Reference / UTR</th><th class="num">Applied</th></tr></thead><tbody>' + paymentRows + '</tbody></table>' +
+      '<div class="payment-note"><b>Status: ' + esc(paymentStatus) + '</b><br>' +
+        (receivable.last_payment_at ? 'Last payment: ' + esc(printDate(receivable.last_payment_at)) + '<br>' : '') +
+        'Only posted payments currently allocated to this invoice are included above. Any customer credit not allocated to this invoice is not treated as invoice payment.</div>' +
+      '<div class="payment-footer"><div><h4>Customer</h4><b>' + esc(customer.name || '') + '</b><br>' +
+        (customer.gstin ? 'GSTIN: ' + esc(customer.gstin) + '<br>' : '') +
+        (customerContact ? esc(customerContact) : '') +
+      '</div><div><h4>Issued by</h4><b>' + esc(company.legal_name || company.company_name || 'eCRM') + '</b><br>' +
+        (company.gstin ? 'GSTIN: ' + esc(company.gstin) + '<br>' : '') +
+        (companyContact ? esc(companyContact) : '') +
+      '</div></div>' +
+      '<div class="wave-a"></div><div class="wave-b"></div>' +
+    '</section>' +
+
+    '<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},250);});<\/script>' +
+    '</body></html>';
+
+  printWindow.document.open();
+  printWindow.document.write(documentHtml);
+  printWindow.document.close();
 }
 
 function invoicePaymentDetails(receivable) {
