@@ -11,7 +11,7 @@ if (!is_dir($private) && is_dir(dirname(__DIR__) . '/app')) {
 }
 
 $checks = [];
-foreach (['data', 'indexes', 'audit', 'jobs'] as $name) {
+foreach (['data', 'indexes', 'uploads', 'audit', 'users', 'config', 'jobs', 'locks', 'backups', 'sessions'] as $name) {
     $path = rtrim($private, '/') . '/' . $name;
     if (!is_dir($path)) {
         @mkdir($path, 0770, true);
