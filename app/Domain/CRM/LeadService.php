@@ -56,6 +56,30 @@ final class LeadService
         return $record;
     }
 
+    public function update(string $id, array $input): array
+    {
+        $record = $this->get($id);
+        foreach (['name', 'company', 'mobile', 'email', 'source', 'requirement'] as $field) {
+            if (array_key_exists($field, $input)) {
+                $record[$field] = trim((string) $input[$field]);
+            }
+        }
+        if (array_key_exists('value', $input)) {
+            $record['value'] = max(0, (float) $input['value']);
+        }
+        if (($record['name'] ?? '') === '') {
+            throw new InvalidArgumentException('Lead name is required');
+        }
+        if (($record['email'] ?? '') !== '' && !filter_var($record['email'], FILTER_VALIDATE_EMAIL)) {
+            throw new InvalidArgumentException('Invalid email address');
+        }
+        $record['updated_at'] = gmdate(DATE_ATOM);
+        $this->store->put('leads', $id, $record);
+        $this->index($record);
+        $this->audit->append('lead.updated', 'lead', $id);
+        return $record;
+    }
+
     public function get(string $id): array
     {
         $record = $this->store->get('leads', $id);
@@ -73,6 +97,9 @@ final class LeadService
         }
 
         $record = $this->get($id);
+        if (!empty($record['customer_id']) && $stage !== 'won') {
+            throw new InvalidArgumentException('Converted lead must remain in Won stage');
+        }
         $record['stage'] = $stage;
         $record['updated_at'] = gmdate(DATE_ATOM);
         $this->store->put('leads', $id, $record);
