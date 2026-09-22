@@ -11,6 +11,25 @@ if (!is_dir($private) && is_dir(dirname(__DIR__) . '/app')) {
 }
 
 $checks = [];
+
+$manifestPath = __DIR__ . '/manifest.json';
+$frontend = ['ok' => false, 'manifest' => false, 'entry' => null, 'missing' => []];
+if (is_file($manifestPath)) {
+    $frontend['manifest'] = true;
+    $manifest = json_decode((string) file_get_contents($manifestPath), true);
+    $entry = is_array($manifest) ? ($manifest['index.html'] ?? null) : null;
+    if (is_array($entry) && !empty($entry['file'])) {
+        $frontend['entry'] = (string) $entry['file'];
+        $files = array_merge([(string) $entry['file']], array_values($entry['css'] ?? []));
+        foreach ($files as $relative) {
+            if (!is_file(__DIR__ . '/' . ltrim((string) $relative, '/'))) {
+                $frontend['missing'][] = (string) $relative;
+            }
+        }
+        $frontend['ok'] = $frontend['missing'] === [];
+    }
+}
+$checks['frontend'] = $frontend;
 foreach (['data', 'indexes', 'uploads', 'audit', 'users', 'config', 'jobs', 'locks', 'backups', 'sessions'] as $name) {
     $path = rtrim($private, '/') . '/' . $name;
     if (!is_dir($path)) {
