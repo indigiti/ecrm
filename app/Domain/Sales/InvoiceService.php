@@ -141,6 +141,17 @@ final class InvoiceService
     public function void(string $id, string $reason): array
     {
         $record = $this->get($id);
+
+        $allocated = 0;
+        foreach ($this->store->all('payment_allocations') as $allocation) {
+            if (($allocation['invoice_id'] ?? null) === $id) {
+                $allocated += (int) ($allocation['amount_paise'] ?? 0);
+            }
+        }
+        if ($allocated !== 0) {
+            throw new InvalidArgumentException('Reverse payment allocations before voiding invoice');
+        }
+
         if (!in_array($record['status'] ?? '', ['draft','issued'], true)) {
             throw new InvalidArgumentException('Invoice cannot be voided in current status');
         }
