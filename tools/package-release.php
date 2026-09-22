@@ -55,7 +55,7 @@ if (is_file($root . '/dist/.vite/manifest.json')) {
 $sha = trim((string) getenv('GITHUB_SHA')) ?: 'local';
 $meta = [
     'app' => 'ecrm',
-    'version' => '0.5.0',
+    'version' => '0.6.0',
     'source_sha' => $sha,
     'built_at' => gmdate(DATE_ATOM),
     'schema' => 2,
