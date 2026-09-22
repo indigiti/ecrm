@@ -30,6 +30,15 @@ final class Application
             : [];
 
         $entry = $manifest['index.html'] ?? null;
+        $entryFile = is_array($entry) ? (string) ($entry['file'] ?? '') : '';
+        $frontendReady = $entryFile !== '' && is_file(Runtime::publicRoot() . '/' . ltrim($entryFile, '/'));
+
+        if (!$frontendReady) {
+            http_response_code(503);
+            echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>eCRM unavailable</title></head><body><main style="font-family:system-ui;padding:2rem"><h1>eCRM frontend bundle unavailable</h1><p>Deployment is incomplete: manifest.json or its entry bundle is missing.</p></main></body></html>';
+            return;
+        }
+
         $scriptName = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '/ecrm/index.php');
         $base = rtrim(dirname($scriptName), '/');
         if ($base === '.' || $base === '/') {
