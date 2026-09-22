@@ -10,6 +10,7 @@ use Ecrm\Audit\AuditLedger;
 use Ecrm\Domain\Admin\SettingsService;
 use Ecrm\Domain\Admin\UserService;
 use Ecrm\Domain\Documents\DocumentService;
+use Ecrm\Integrity\IntegrityVerifier;
 use Ecrm\Search\SearchIndex;
 use Ecrm\Search\SearchRebuilder;
 use Ecrm\Security\SessionAuth;
@@ -154,6 +155,10 @@ try {
     expectAdmin(($rebuilt['documents'] ?? 0) === 1, 'Document search rebuild count incorrect');
     $matches = $search->search('Administration Notes');
     expectAdmin(count($matches) === 1 && ($matches[0]['type'] ?? '') === 'document', 'Document not searchable after rebuild');
+
+    $integrity = (new IntegrityVerifier($data, $root . '/audit', $root . '/uploads'))->verify();
+    expectAdmin($integrity['ok'] === true, 'Administration document integrity failed: ' . implode('; ', $integrity['errors']));
+    expectAdmin(($integrity['checked']['documents'] ?? 0) === 1, 'Administration document integrity count incorrect');
 
     $archived = $documents->archive($document['id'], 'Superseded in test');
     expectAdmin($archived['status'] === 'archived', 'Document archive failed');
