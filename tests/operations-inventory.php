@@ -53,7 +53,7 @@ try {
     $products = new ProductService($store, $sequence, $search, $audit);
     $locations = new LocationService($store, $sequence, $search, $audit);
     $units = new ProductUnitService($store, $search, $audit, $root . '/locks');
-    $movements = new MovementService($store, $audit, $root . '/locks');
+    $movements = new MovementService($store, $audit, $root . '/locks', $sequence);
     $stock = new StockService($store);
 
     $warehouse = $locations->create([
