@@ -9,6 +9,7 @@ require dirname(__DIR__) . '/app/bootstrap.php';
 use Ecrm\Audit\AuditLedger;
 use Ecrm\Domain\CRM\ActivityService;
 use Ecrm\Domain\CRM\GeocodingQueue;
+use Ecrm\Domain\CRM\LeadConversionService;
 use Ecrm\Domain\CRM\LeadService;
 use Ecrm\Domain\Customers\AddressService;
 use Ecrm\Domain\Customers\ContactService;
@@ -31,6 +32,7 @@ try {
     $contacts = new ContactService($store, $search, $audit);
     $addresses = new AddressService($store, $search, $audit, $queue);
     $leads = new LeadService($store, $sequence, $search, $audit);
+    $conversion = new LeadConversionService($leads, $customers);
     $activities = new ActivityService($store, $audit);
 
     $customer = $customers->create(['name' => 'ABC Industries', 'mobile' => '9999999999']);
@@ -45,12 +47,26 @@ try {
     $mapped = $addresses->create($customer['id'], ['type' => 'warehouse', 'address' => 'Warehouse', 'city' => 'Pune', 'latitude' => 18.5204, 'longitude' => 73.8567]);
     expect(count($addresses->mapped()) === 1, 'Mapped address query failed');
 
-    $lead = $leads->create(['name' => 'Expansion project', 'company' => 'ABC Industries', 'customer_id' => $customer['id']]);
+    $lead = $leads->create(['name' => 'Expansion project', 'company' => 'Newco Industries', 'mobile' => '7777777777']);
     $lead = $leads->changeStage($lead['id'], 'requirement');
     expect($lead['stage'] === 'requirement', 'Lead stage update failed');
 
-    $activity = $activities->create(['customer_id' => $customer['id'], 'type' => 'follow_up', 'subject' => 'Call procurement']);
+    $converted = $conversion->convert($lead['id']);
+    expect($converted['created'] === true, 'Lead conversion did not create a customer');
+    expect($converted['lead']['stage'] === 'won', 'Converted lead must be won');
+    expect($converted['lead']['customer_id'] === $converted['customer']['id'], 'Lead/customer relationship missing');
+    $convertedAgain = $conversion->convert($lead['id']);
+    expect($convertedAgain['created'] === false, 'Lead conversion must be idempotent');
+
+    $activity = $activities->create([
+        'customer_id' => $customer['id'],
+        'type' => 'follow_up',
+        'subject' => 'Call procurement',
+        'due_at' => '2000-01-01T09:00'
+    ]);
     expect($activity['status'] === 'open', 'Follow-up should be open');
+    expect($activity['attention'] === 'overdue', 'Past follow-up should be overdue');
+    expect(count($activities->attention()['overdue']) === 1, 'Overdue attention bucket failed');
     expect($activities->complete($activity['id'])['status'] === 'completed', 'Follow-up completion failed');
 
     expect(count($search->search('ABC')) >= 1, 'Search index failed');

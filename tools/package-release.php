@@ -35,6 +35,12 @@ mkdir($release . '/private/build', 0775, true);
 copytree($root . '/public', $release . '/public');
 copytree($root . '/app', $release . '/private/app');
 copytree($root . '/vendor', $release . '/private/vendor');
+copytree($root . '/workers', $release . '/private/workers');
+
+if (!is_dir($release . '/private/tools')) mkdir($release . '/private/tools', 0775, true);
+if (is_file($root . '/tools/apply-geocodes.php')) {
+    copy($root . '/tools/apply-geocodes.php', $release . '/private/tools/apply-geocodes.php');
+}
 
 if (is_dir($root . '/dist/assets')) {
     copytree($root . '/dist/assets', $release . '/public/assets');
@@ -54,6 +60,10 @@ $meta = [
     'public_entry' => 'index.php',
     'health_endpoint' => 'health.php',
     'persistent_paths' => ['data', 'indexes', 'uploads', 'audit', 'users', 'config', 'jobs', 'locks', 'backups'],
+    'runtime_commands' => [
+        'geocode_provider' => 'python3 workers/geocode.py',
+        'apply_geocodes' => 'php tools/apply-geocodes.php',
+    ],
 ];
 
 $json = json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n";
