@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import QRCode from 'qrcode';
 
 const app = document.querySelector('#app');
-const state = { view: 'dashboard', map: null, searchTimer: null, financeTab: 'receipts', inventoryTab: 'stock', reportType: 'sales' };
+const state = { view: 'dashboard', map: null, searchTimer: null, financeTab: 'receipts', inventoryTab: 'stock', reportType: 'sales', currentUser: null, csrfToken: null };
 const activeViews = ['dashboard','customers','leads','followups','map','products','inventory','workshop','quotations','invoices','payments','reports'];
 const nav = [
   ['dashboard','Dashboard'],['customers','Customers'],['leads','Leads'],['followups','Follow-ups'],['map','Map'],
@@ -27,11 +27,35 @@ function moneyPaise(value) {
 }
 
 async function api(path, options) {
-  const config = Object.assign({headers:{'Content-Type':'application/json','Accept':'application/json'}}, options || {});
-  if (config.body && typeof config.body !== 'string') config.body = JSON.stringify(config.body);
+  const config = Object.assign({}, options || {});
+  const isForm = typeof FormData !== 'undefined' && config.body instanceof FormData;
+  config.headers = Object.assign({'Accept':'application/json'}, config.headers || {});
+
+  if (!isForm) {
+    config.headers['Content-Type'] = 'application/json';
+    if (config.body && typeof config.body !== 'string') config.body = JSON.stringify(config.body);
+  }
+
+  const method = String(config.method || 'GET').toUpperCase();
+  if (state.csrfToken && !['GET','HEAD','OPTIONS'].includes(method)) {
+    config.headers['X-CSRF-Token'] = state.csrfToken;
+  }
+
   const response = await fetch('./api/' + path, config);
   const payload = await response.json().catch(function(){ return {error:'Invalid server response'}; });
-  if (!response.ok) throw new Error(payload.error || 'Request failed');
+
+  if (response.status === 401 && !String(path).startsWith('auth/')) {
+    state.currentUser = null;
+    state.csrfToken = null;
+    renderAuth(false);
+  }
+
+  if (!response.ok) {
+    const error = new Error(payload.error || 'Request failed');
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
   return payload;
 }
 
@@ -53,7 +77,7 @@ function shell() {
         '<header class="topbar">' +
           '<div class="mobile-brand"><span class="logo">e</span><b>eCRM</b></div>' +
           '<div class="search-wrap"><input id="global-search" autocomplete="off" placeholder="Search customers, contacts, GST, leads…"><kbd>⌘ K</kbd><div id="search-results" class="search-results hidden"></div></div>' +
-          '<div class="top-actions"><button class="soft" id="scan-qr">Scan QR</button><button class="primary" id="new-customer">+ New</button></div>' +
+          '<div class="top-actions"><button class="soft" id="scan-qr">Scan QR</button>' + (state.currentUser && state.currentUser.role !== 'read_only' ? '<button class="primary" id="new-customer">+ New</button>' : '') + '<span class="user-chip"><b>' + esc(state.currentUser ? state.currentUser.name : '') + '</b><small>' + esc(state.currentUser ? state.currentUser.role : '') + '</small></span><button class="soft" id="logout-user">Logout</button></div>' +
         '</header>' +
         '<main id="workspace"></main>' +
         '<nav class="mobile-nav"><button data-view="dashboard">Home</button><button data-view="customers">Customers</button><button data-view="map">Map</button><button data-view="leads">Leads</button><button data-view="followups">Activity</button></nav>' +
@@ -64,8 +88,13 @@ function shell() {
     if (btn.dataset.view === state.view) btn.classList.add('active');
     btn.addEventListener('click', function(){ state.view = btn.dataset.view; shell(); });
   });
-  document.querySelector('#new-customer').addEventListener('click', customerModal);
+  const newCustomerButton = document.querySelector('#new-customer');
+  if (newCustomerButton) newCustomerButton.addEventListener('click', customerModal);
   document.querySelector('#scan-qr').addEventListener('click', qrScanModal);
+  document.querySelector('#logout-user').addEventListener('click', async function(){
+    try { await api('auth/logout',{method:'POST'}); } catch(e) {}
+    state.currentUser = null; state.csrfToken = null; renderAuth(false);
+  });
 
   const search = document.querySelector('#global-search');
   search.addEventListener('input', function(){
@@ -331,7 +360,57 @@ async function leads(w) {
         const payload = await api('leads/' + btn.dataset.convert + '/convert',{method:'POST',body:{}});
         toast('Lead converted to ' + payload.data.customer.number);
         state.view = 'customers';
-        shell();
+        async function boot() {
+  app.innerHTML = '<main class="boot-screen">Loading eCRM…</main>';
+  try {
+    const status = await api('auth/status');
+    if (status.setup_required) {
+      renderAuth(true);
+      return;
+    }
+    if (!status.authenticated) {
+      renderAuth(false);
+      return;
+    }
+    state.currentUser = status.user;
+    state.csrfToken = status.csrf_token;
+    shell();
+  } catch(e) {
+    app.innerHTML = '<main class="boot-screen"><b>eCRM could not start</b><span>' + esc(e.message) + '</span></main>';
+  }
+}
+
+function renderAuth(setupRequired) {
+  state.currentUser = null;
+  state.csrfToken = null;
+  const title = setupRequired ? 'Create first admin' : 'Sign in';
+  const subtitle = setupRequired ? 'Initialize this eCRM installation with its first administrator.' : 'Use your eCRM account to continue.';
+  const button = setupRequired ? 'Create Admin' : 'Sign In';
+
+  app.innerHTML =
+    '<main class="auth-screen"><section class="auth-card"><div class="brand auth-brand"><span class="logo">e</span><div><b>eCRM</b><small>Business workspace</small></div></div><p class="eyebrow">' + (setupRequired ? 'FIRST RUN' : 'SECURE ACCESS') + '</p><h1>' + title + '</h1><p>' + subtitle + '</p><form id="auth-form" class="auth-form">' +
+      (setupRequired ? '<label>Name<input required name="name" autocomplete="name"></label>' : '') +
+      '<label>Email<input required type="email" name="email" autocomplete="username"></label><label>Password<input required type="password" minlength="12" name="password" autocomplete="' + (setupRequired ? 'new-password' : 'current-password') + '"></label>' +
+      '<button class="primary" type="submit">' + button + '</button><div id="auth-error" class="auth-error"></div></form></section></main>';
+
+  document.querySelector('#auth-form').onsubmit = async function(e){
+    e.preventDefault();
+    const error = document.querySelector('#auth-error');
+    error.textContent = '';
+    const payload = Object.fromEntries(new FormData(e.currentTarget).entries());
+    try {
+      const result = await api(setupRequired ? 'auth/setup' : 'auth/login',{method:'POST',body:payload});
+      state.currentUser = result.data;
+      state.csrfToken = result.csrf_token;
+      state.view = 'dashboard';
+      shell();
+    } catch(err) {
+      error.textContent = err.message;
+    }
+  };
+}
+
+boot();
         setTimeout(function(){ openCustomer(payload.data.customer.id); }, 0);
       } catch (e) { btn.disabled = false; toast(e.message,true); }
     };
