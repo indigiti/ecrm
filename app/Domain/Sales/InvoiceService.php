@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Ecrm\Domain\Sales;
 
 use Ecrm\Audit\AuditLedger;
+use Ecrm\Domain\Admin\SettingsService;
 use Ecrm\Search\SearchIndex;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\ExclusiveLock;
@@ -21,7 +22,8 @@ final class InvoiceService
         private SearchIndex $search,
         private AuditLedger $audit,
         private SalesCalculator $calculator,
-        private ?string $lockRoot = null
+        private ?string $lockRoot = null,
+        private ?SettingsService $settings = null
     ) {}
 
     public function create(array $input): array
@@ -212,11 +214,12 @@ final class InvoiceService
         $address = $source['address'];
         $calculated = $source['calculated'];
         $year = gmdate('Y');
+        $prefix = (string) (($this->settings?->get()['invoice_prefix'] ?? null) ?: 'INV');
         $now = gmdate(DATE_ATOM);
 
         $record = [
             'id' => UuidV7::generate(),
-            'number' => $this->sequence->next('invoices-' . $year, 'INV-' . $year . '-'),
+            'number' => $this->sequence->next('invoices-' . $year, $prefix . '-' . $year . '-'),
             'quotation_id' => $source['quotation_id'] ?: null,
             'customer_id' => $customer['id'],
             'address_id' => $address['id'] ?? null,
