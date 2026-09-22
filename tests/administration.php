@@ -129,6 +129,11 @@ try {
         'Financial year start month must be between 1 and 12'
     );
 
+    expectAdminError(
+        fn() => $settings->update(['quote_prefix' => 'bad prefix']),
+        'Invalid quote prefix'
+    );
+
     $tmp = $root . '/upload-source.txt';
     file_put_contents($tmp, "eCRM administration document\n");
     $document = $documents->upload([
