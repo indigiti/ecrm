@@ -5,7 +5,7 @@ import QRCode from 'qrcode';
 
 const app = document.querySelector('#app');
 const state = { view: 'dashboard', map: null, searchTimer: null, financeTab: 'receipts', inventoryTab: 'stock' };
-const activeViews = ['dashboard','customers','leads','followups','map','products','inventory','quotations','invoices','payments'];
+const activeViews = ['dashboard','customers','leads','followups','map','products','inventory','workshop','quotations','invoices','payments'];
 const nav = [
   ['dashboard','Dashboard'],['customers','Customers'],['leads','Leads'],['followups','Follow-ups'],['map','Map'],
   ['products','Products'],['inventory','Inventory'],['workshop','Workshop'],['quotations','Quotations'],
@@ -103,6 +103,7 @@ async function searchGlobal(query) {
         if (el.dataset.type === 'product') { state.view = 'products'; shell(); setTimeout(function(){ openProduct(el.dataset.id); },0); }
         if (el.dataset.type === 'location') { state.view = 'inventory'; state.inventoryTab = 'locations'; shell(); }
         if (el.dataset.type === 'product_unit') { state.view = 'inventory'; shell(); setTimeout(function(){ openUnit(el.dataset.id); },0); }
+        if (el.dataset.type === 'workshop_job') { state.view = 'workshop'; shell(); setTimeout(function(){ openWorkshopJob(el.dataset.id); },0); }
         if (el.dataset.type === 'quotation') { state.view = 'quotations'; shell(); }
         if (el.dataset.type === 'invoice') { state.view = 'invoices'; shell(); }
         if (el.dataset.type === 'payment') { state.view = 'payments'; shell(); setTimeout(function(){ openPayment(el.dataset.id); },0); }
@@ -126,6 +127,7 @@ async function renderView() {
     if (state.view === 'map') return mapView(w);
     if (state.view === 'products') return products(w);
     if (state.view === 'inventory') return inventoryWorkspace(w);
+    if (state.view === 'workshop') return workshopWorkspace(w);
     if (state.view === 'quotations') return quotations(w);
     if (state.view === 'invoices') return invoices(w);
     if (state.view === 'payments') return paymentsWorkspace(w);
@@ -1286,6 +1288,200 @@ function paymentVoidModal(payment) {
       return function(){ openPayment(payment.id); };
     }
   );
+}
+
+
+async function workshopWorkspace(w) {
+  const results = await Promise.all([api('workshop/jobs'), api('customers'), api('products')]);
+  const payload = results[0], customers = results[1].data, products = results[2].data;
+  const customerMap = Object.fromEntries(customers.map(function(c){ return [c.id,c]; }));
+  const productMap = Object.fromEntries(products.map(function(p){ return [p.id,p]; }));
+  const rows = payload.data;
+
+  const openCount = rows.filter(function(j){ return !['completed','cancelled'].includes(j.status); }).length;
+  const readyCount = rows.filter(function(j){ return j.status === 'ready'; }).length;
+  const waitingCount = rows.filter(function(j){ return j.status === 'waiting_parts'; }).length;
+
+  const body = rows.length ? rows.map(function(job){
+    const customer = customerMap[job.customer_id] || {};
+    const product = productMap[job.product_id] || {};
+    return '<button class="workshop-row" data-workshop-job="' + esc(job.id) + '"><span><b>' + esc(job.number) + '</b><small>' + esc(job.priority) + ' priority</small></span><span><b>' + esc(customer.name || 'No customer') + '</b><small>' + esc(product.name || job.asset_serial || 'Asset') + '</small></span><span><b>' + esc(job.reported_issue) + '</b><small>' + esc(job.ownership) + ' asset</small></span><span><i class="pill">' + esc(String(job.status || '').replaceAll('_',' ')) + '</i></span></button>';
+  }).join('') : '<div class="empty-state"><b>No workshop jobs yet</b><span>Create a repair job for a company serialized unit or a customer-owned asset.</span></div>';
+
+  w.innerHTML =
+    '<section class="page-head"><div><p class="eyebrow">WORKSHOP</p><h1>Repair Jobs</h1><p>Asset check-in, diagnosis, work history and controlled check-out.</p></div><button class="primary" id="new-workshop-job">+ Workshop Job</button></section>' +
+    '<section class="metrics workshop-metrics">' +
+      metric('Open jobs', openCount, 'Active workshop workload') +
+      metric('Waiting parts', waitingCount, 'Needs material') +
+      metric('Ready', readyCount, 'Ready for check-out / completion') +
+      metric('Completed', rows.filter(function(j){ return j.status === 'completed'; }).length, 'Repair history retained') +
+    '</section>' +
+    '<article class="table-card workshop-card"><div class="workshop-head"><span>Job</span><span>Customer / Asset</span><span>Reported issue</span><span>Status</span></div>' + body + '</article>';
+
+  document.querySelector('#new-workshop-job').onclick = function(){ workshopJobModal(); };
+  w.querySelectorAll('[data-workshop-job]').forEach(function(btn){ btn.onclick = function(){ openWorkshopJob(btn.dataset.workshopJob); }; });
+}
+
+async function openWorkshopJob(id) {
+  state.view = 'workshop';
+  const w = document.querySelector('#workspace');
+  w.innerHTML = '<div class="loading">Loading workshop job…</div>';
+
+  try {
+    const payload = await api('workshop/jobs/' + id);
+    const data = payload.data, job = data.job;
+    const customer = data.customer || {}, product = data.product || {}, bay = data.workshop_location || {};
+    const checkedIn = !!job.checked_in_at && !job.checked_out_at;
+
+    let actions = '<button class="soft" id="print-workshop">Print</button>';
+    if (!['completed','cancelled'].includes(job.status)) actions += '<button class="soft" id="edit-workshop">Edit</button>';
+    if (!job.checked_in_at || job.checked_out_at) {
+      if (!['completed','cancelled'].includes(job.status)) actions += '<button class="soft" id="workshop-check-in">Check In</button>';
+    } else {
+      actions += '<button class="soft" id="workshop-check-out">Check Out</button>';
+    }
+
+    const statusActions = workshopStatusActions(job);
+    actions += statusActions;
+
+    w.innerHTML =
+      '<button class="back" id="back-workshop">← Workshop</button>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(job.number) + ' · ' + esc(job.priority) + ' PRIORITY</p><h1>' + esc(product.name || job.asset_serial || 'Workshop Asset') + '</h1><p>' + esc(customer.name || 'No customer') + ' · ' + esc(job.ownership) + ' asset · ' + esc(String(job.status).replaceAll('_',' ')) + '</p></div><div class="record-actions workshop-actions">' + actions + '</div></section>' +
+      '<section class="metrics workshop-metrics">' +
+        metric('Status', String(job.status).replaceAll('_',' '), checkedIn ? 'Currently checked in' : (job.checked_out_at ? 'Checked out' : 'Not checked in')) +
+        metric('Workshop bay', bay.name || 'Not assigned', bay.code || 'Assign before check-in') +
+        metric('Asset serial', data.unit ? data.unit.unit.serial_no : (job.asset_serial || '—'), data.unit ? 'Company serialized unit' : 'Customer asset') +
+      '</section>' +
+      '<section class="dash-grid workshop-detail-grid">' +
+        '<article class="panel"><p class="eyebrow">REPORTED ISSUE</p><p class="workshop-copy">' + esc(job.reported_issue) + '</p></article>' +
+        '<article class="panel"><p class="eyebrow">DIAGNOSIS</p><p class="workshop-copy">' + esc(job.diagnosis || 'Not recorded yet') + '</p></article>' +
+        '<article class="panel"><p class="eyebrow">WORK DONE</p><p class="workshop-copy">' + esc(job.work_done || 'Not recorded yet') + '</p></article>' +
+        '<article class="panel"><p class="eyebrow">PARTS / NOTES</p><p class="workshop-copy">' + esc([job.parts_notes,job.notes].filter(Boolean).join('\n') || '—') + '</p></article>' +
+        '<article class="panel wide"><p class="eyebrow">JOB TIMELINE</p>' + workshopTimeline(job) + '</article>' +
+      '</section>';
+
+    document.querySelector('#back-workshop').onclick = function(){ workshopWorkspace(w); };
+    document.querySelector('#print-workshop').onclick = function(){ window.print(); };
+    const edit = document.querySelector('#edit-workshop');
+    if (edit) edit.onclick = function(){ workshopJobModal(job); };
+    const checkIn = document.querySelector('#workshop-check-in');
+    if (checkIn) checkIn.onclick = async function(){
+      try { await api('workshop/jobs/' + id + '/check-in',{method:'POST'}); toast('Asset checked in'); openWorkshopJob(id); }
+      catch(e) { toast(e.message,true); }
+    };
+    const checkOut = document.querySelector('#workshop-check-out');
+    if (checkOut) checkOut.onclick = function(){ workshopCheckOutModal(job); };
+    w.querySelectorAll('[data-workshop-status]').forEach(function(btn){
+      btn.onclick = async function(){
+        try {
+          await api('workshop/jobs/' + id + '/status',{method:'PATCH',body:{status:btn.dataset.workshopStatus}});
+          toast('Workshop status updated');
+          openWorkshopJob(id);
+        } catch(e) { toast(e.message,true); }
+      };
+    });
+  } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
+function workshopStatusActions(job) {
+  const allowed = {
+    new:['in_progress','cancelled'],
+    in_progress:['waiting_parts','ready','cancelled'],
+    waiting_parts:['in_progress','ready','cancelled'],
+    ready:['in_progress','completed','cancelled'],
+    completed:[],
+    cancelled:[]
+  };
+  return (allowed[job.status] || []).map(function(status){
+    const primary = status === 'completed' ? ' primary' : ' soft';
+    return '<button class="' + primary.trim() + '" data-workshop-status="' + esc(status) + '">' + esc(workshopStatusLabel(status)) + '</button>';
+  }).join('');
+}
+
+function workshopStatusLabel(status) {
+  return ({
+    in_progress:'In Progress',
+    waiting_parts:'Waiting Parts',
+    ready:'Ready',
+    completed:'Complete',
+    cancelled:'Cancel'
+  })[status] || String(status || '').replaceAll('_',' ');
+}
+
+function workshopTimeline(job) {
+  const rows = [
+    ['Created',job.created_at],
+    ['Checked in',job.checked_in_at],
+    ['Checked out',job.checked_out_at],
+    ['Completed',job.completed_at],
+    ['Cancelled',job.cancelled_at]
+  ].filter(function(row){ return row[1]; });
+
+  if (!rows.length) return '<div class="empty-small">No job events.</div>';
+  return '<div class="workshop-timeline">' + rows.map(function(row){
+    return '<div><span class="timeline-dot"></span><b>' + esc(row[0]) + '</b><time>' + esc(new Date(row[1]).toLocaleString()) + '</time></div>';
+  }).join('') + '</div>';
+}
+
+async function workshopJobModal(job) {
+  job = job || null;
+  try {
+    const results = await Promise.all([api('customers'),api('products'),api('product-units'),api('locations')]);
+    const customers = results[0].data;
+    const products = results[1].data.filter(function(p){ return p.status === 'active'; });
+    const units = results[2].data.filter(function(u){ return u.lifecycle_status === 'active'; });
+    const bays = results[3].data.filter(function(l){ return l.status === 'active' && l.type === 'workshop_bay'; });
+
+    const customerOptions = '<option value="">No customer</option>' + customers.map(function(c){ return '<option value="' + esc(c.id) + '"' + (job && job.customer_id === c.id ? ' selected' : '') + '>' + esc(c.name) + '</option>'; }).join('');
+    const productOptions = '<option value="">No Product Master</option>' + products.map(function(p){ return '<option value="' + esc(p.id) + '"' + (job && job.product_id === p.id ? ' selected' : '') + '>' + esc(p.name) + ' · ' + esc(p.code) + '</option>'; }).join('');
+    const unitOptions = '<option value="">Customer asset / no company unit</option>' + units.map(function(u){ return '<option value="' + esc(u.id) + '"' + (job && job.product_unit_id === u.id ? ' selected' : '') + '>' + esc(u.serial_no) + '</option>'; }).join('');
+    const bayOptions = '<option value="">Assign later</option>' + bays.map(function(l){ return '<option value="' + esc(l.id) + '"' + (job && job.workshop_location_id === l.id ? ' selected' : '') + '>' + esc(l.name) + ' · ' + esc(l.code) + '</option>'; }).join('');
+
+    modal(job ? 'Edit workshop job' : 'New workshop job',
+      '<label>Customer<select name="customer_id">' + customerOptions + '</select></label><label>Ownership<select name="ownership"><option value="customer"' + (!job || job.ownership === 'customer' ? ' selected' : '') + '>Customer-owned</option><option value="company"' + (job && job.ownership === 'company' ? ' selected' : '') + '>Company-owned</option></select></label>' +
+      '<label>Product<select name="product_id">' + productOptions + '</select></label><label>Company serial unit<select name="product_unit_id">' + unitOptions + '</select></label>' +
+      '<label>Customer asset serial<input name="asset_serial" value="' + esc(job ? job.asset_serial || '' : '') + '"></label><label>Workshop bay<select name="workshop_location_id">' + bayOptions + '</select></label>' +
+      '<label>Priority<select name="priority">' + ['low','normal','high','urgent'].map(function(p){ return '<option value="' + p + '"' + ((!job && p === 'normal') || (job && job.priority === p) ? ' selected' : '') + '>' + p + '</option>'; }).join('') + '</select></label>' +
+      '<label class="full">Reported issue<textarea required name="reported_issue">' + esc(job ? job.reported_issue : '') + '</textarea></label>' +
+      '<label class="full">Diagnosis<textarea name="diagnosis">' + esc(job ? job.diagnosis || '' : '') + '</textarea></label>' +
+      '<label class="full">Work done<textarea name="work_done">' + esc(job ? job.work_done || '' : '') + '</textarea></label>' +
+      '<label class="full">Parts notes<textarea name="parts_notes">' + esc(job ? job.parts_notes || '' : '') + '</textarea></label>' +
+      '<label class="full">Notes<textarea name="notes">' + esc(job ? job.notes || '' : '') + '</textarea></label>',
+      async function(payload){
+        if (job) {
+          delete payload.customer_id; delete payload.ownership; delete payload.product_id; delete payload.product_unit_id; delete payload.asset_serial;
+        }
+        const result = await api(job ? 'workshop/jobs/' + job.id : 'workshop/jobs',{method:job ? 'PATCH' : 'POST',body:payload});
+        return function(){ openWorkshopJob(result.data.id); };
+      }
+    );
+  } catch(e) { toast(e.message,true); }
+}
+
+async function workshopCheckOutModal(job) {
+  if (job.ownership !== 'company') {
+    try {
+      await api('workshop/jobs/' + job.id + '/check-out',{method:'POST',body:{}});
+      toast('Customer asset checked out');
+      openWorkshopJob(job.id);
+    } catch(e) { toast(e.message,true); }
+    return;
+  }
+
+  try {
+    const locations = (await api('locations')).data.filter(function(l){
+      return l.status === 'active' && l.id !== job.workshop_location_id;
+    });
+    const options = locations.map(function(l){ return '<option value="' + esc(l.id) + '">' + esc(l.name) + ' · ' + esc(l.code) + '</option>'; }).join('');
+
+    modal('Check out company asset',
+      '<label class="full">Destination location<select required name="destination_location_id"><option value="">Select destination</option>' + options + '</select></label>',
+      async function(payload){
+        await api('workshop/jobs/' + job.id + '/check-out',{method:'POST',body:payload});
+        return function(){ openWorkshopJob(job.id); };
+      }
+    );
+  } catch(e) { toast(e.message,true); }
 }
 
 function comingSoon(w) {
