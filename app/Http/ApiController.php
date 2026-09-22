@@ -40,6 +40,7 @@ use Throwable;
 final class ApiController
 {
     private AtomicJsonStore $store;
+    private AuditLedger $audit;
     private SessionAuth $auth;
     private UserService $users;
     private SettingsService $settings;
@@ -70,6 +71,7 @@ final class ApiController
         $this->store = new AtomicJsonStore(Runtime::dataRoot());
         $this->search = new SearchIndex(Runtime::indexRoot());
         $audit = new AuditLedger(Runtime::auditRoot());
+        $this->audit = $audit;
         $sequence = new Sequence(Runtime::dataRoot() . '/sequences');
         $geocoding = new GeocodingQueue(Runtime::jobsRoot());
         $calculator = new SalesCalculator();
@@ -166,6 +168,13 @@ final class ApiController
                 $this->json(['error' => 'Authentication required'], 401);
                 return;
             }
+
+            $this->audit->setActor([
+                'id' => $currentUser['id'] ?? null,
+                'name' => $currentUser['name'] ?? null,
+                'email' => $currentUser['email'] ?? null,
+                'role' => $currentUser['role'] ?? null,
+            ]);
 
             if (!in_array($method, ['GET','HEAD','OPTIONS'], true)
                 && !$this->auth->verifyCsrf($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null)) {
@@ -865,8 +874,15 @@ final class ApiController
 
     private function input(): array
     {
+        $contentType = strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ''));
+        if (str_starts_with($contentType, 'multipart/form-data')
+            || str_starts_with($contentType, 'application/x-www-form-urlencoded')) {
+            return is_array($_POST) ? $_POST : [];
+        }
+
         $raw = (string) file_get_contents('php://input');
-        if ($raw === '') return $_POST ?: [];
+        if ($raw === '') return is_array($_POST) ? $_POST : [];
+
         $decoded = json_decode($raw, true);
         return is_array($decoded) ? $decoded : [];
     }
