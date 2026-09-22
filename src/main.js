@@ -942,7 +942,8 @@ async function openInvoice(id) {
       '<button class="back" id="back-invoices">← Invoices</button>' +
       '<section class="record-head"><div><p class="eyebrow">' + esc(inv.number) + '</p><h1>' + esc(inv.customer_snapshot.name) + '</h1><p>' + esc(inv.status) + (inv.due_date ? ' · due ' + esc(inv.due_date) : '') + '</p></div><div class="record-actions">' + actions + '</div></section>' +
       salesDocumentDetail(inv, 'Invoice') +
-      '<section class="metrics finance-metrics invoice-finance"><article><span>Allocated</span><strong>' + moneyPaise(receivable.allocated_paise) + '</strong><small>Applied receipts</small></article><article><span>Outstanding</span><strong>' + moneyPaise(receivable.outstanding_paise) + '</strong><small>' + esc(ageingLabel(receivable.ageing_bucket)) + '</small></article></section>' +
+      '<section class="metrics finance-metrics invoice-finance"><article><span>Paid</span><strong>' + moneyPaise(receivable.paid_paise != null ? receivable.paid_paise : receivable.allocated_paise) + '</strong><small>' + esc((receivable.payment_count || 0) + ' applied receipt' + ((receivable.payment_count || 0) === 1 ? '' : 's')) + '</small></article><article><span>Pending</span><strong>' + moneyPaise(receivable.pending_paise != null ? receivable.pending_paise : receivable.outstanding_paise) + '</strong><small>' + esc(ageingLabel(receivable.ageing_bucket)) + '</small></article></section>' +
+      invoicePaymentDetails(receivable) +
       '<section class="dash-grid"><article class="panel"><p class="eyebrow">TERMS</p><p class="document-note">' + esc(inv.terms || '—') + '</p></article><article class="panel"><p class="eyebrow">SOURCE</p><p class="document-note">' + (inv.quotation_id ? 'Approved quotation linked' : 'Standalone invoice') + '</p></article></section>';
 
     document.querySelector('#back-invoices').onclick = function(){ invoices(w); };
@@ -952,6 +953,9 @@ async function openInvoice(id) {
     if (editButton) editButton.onclick = function(){ salesDocumentModal('invoice', inv); };
     const invoicePayment = document.querySelector('#invoice-payment');
     if (invoicePayment) invoicePayment.onclick = function(){ paymentModal(inv.customer_id); };
+    w.querySelectorAll('[data-invoice-payment]').forEach(function(btn){
+      btn.onclick = function(){ openPayment(btn.dataset.invoicePayment); };
+    });
     const issue = document.querySelector('#issue-invoice');
     if (issue) issue.onclick = async function(){
       try { await api('invoices/' + inv.id + '/issue',{method:'POST'}); toast('Invoice issued and locked'); openInvoice(inv.id); }
@@ -960,6 +964,30 @@ async function openInvoice(id) {
     const voidButton = document.querySelector('#void-invoice');
     if (voidButton) voidButton.onclick = function(){ voidInvoiceModal(inv); };
   } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
+function invoicePaymentDetails(receivable) {
+  const payments = Array.isArray(receivable.payments) ? receivable.payments : [];
+
+  const body = payments.length ? payments.map(function(payment){
+    const method = paymentMethodLabel(payment.method || '');
+    const reference = payment.reference || 'No reference';
+    const date = payment.received_at ? new Date(payment.received_at).toLocaleDateString('en-IN') : '—';
+
+    return '<button class="invoice-payment-row" data-invoice-payment="' + esc(payment.payment_id) + '">' +
+      '<span><b>' + esc(payment.payment_number || 'Receipt') + '</b><small>' + esc(date) + '</small></span>' +
+      '<span><b>' + esc(method || 'Payment') + '</b><small>' + esc(reference) + '</small></span>' +
+      '<strong>' + moneyPaise(payment.allocated_paise || 0) + '</strong>' +
+    '</button>';
+  }).join('') : '<div class="empty-small">No payment has been applied to this invoice yet.</div>';
+
+  return '<article class="panel invoice-payments-panel">' +
+    '<div class="row"><div><p class="eyebrow">PAYMENT DETAILS</p><h2>Payments applied to this invoice</h2></div>' +
+    (receivable.last_payment_at ? '<span class="pill">Last payment ' + esc(new Date(receivable.last_payment_at).toLocaleDateString('en-IN')) + '</span>' : '') +
+    '</div>' +
+    '<div class="invoice-payment-head"><span>Receipt / Date</span><span>Method / Reference</span><span>Applied</span></div>' +
+    '<div class="invoice-payment-list">' + body + '</div>' +
+  '</article>';
 }
 
 function salesDocumentDetail(record, kind) {
