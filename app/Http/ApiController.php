@@ -63,7 +63,7 @@ final class ApiController
         $this->products = new ProductService($this->store, $sequence, $this->search, $audit);
         $this->quotations = new QuotationService($this->store, $sequence, $this->search, $audit, $calculator);
         $this->invoices = new InvoiceService($this->store, $sequence, $this->search, $audit, $calculator, $locks);
-        $this->paymentBatches = new PaymentBatchService($this->store, $sequence, $this->search, $audit);
+        $this->paymentBatches = new PaymentBatchService($this->store, $sequence, $this->search, $audit, $locks);
         $this->payments = new PaymentService($this->store, $sequence, $this->search, $audit, $locks);
         $this->allocations = new AllocationService($this->store, $audit, $locks, $this->search);
         $this->receivables = new ReceivablesService($this->store, $this->allocations);
