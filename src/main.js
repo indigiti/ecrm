@@ -332,6 +332,276 @@ async function mapView(w) {
   w.querySelectorAll('.map-list button').forEach(function(btn){ btn.onclick = function(){ map.flyTo([Number(btn.dataset.lat),Number(btn.dataset.lon)],14); }; });
 }
 
+
+async function products(w) {
+  const payload = await api('products');
+  const rows = payload.data;
+  const body = rows.length ? rows.map(function(p){
+    return '<button class="table-row product-row" data-product="' + esc(p.id) + '"><span><b>' + esc(p.name) + '</b><small>' + esc(p.code) + (p.sku ? ' · ' + esc(p.sku) : '') + '</small></span><span>' + esc(p.brand || p.category || '—') + '<small>' + esc(p.model || p.hsn_sac || '') + '</small></span><span>' + moneyPaise(p.selling_price_paise) + '<small>GST ' + ((p.gst_bps || 0) / 100) + '%</small></span><span><i class="pill">' + esc(p.status) + '</i></span></button>';
+  }).join('') : '<div class="empty-state"><b>No products yet</b><span>Create Product Master records before building quotations.</span></div>';
+
+  w.innerHTML =
+    '<section class="page-head"><div><p class="eyebrow">PRODUCTS</p><h1>Product Master</h1><p>Commercial master data used by quotations, invoices and later inventory movements.</p></div><button class="primary" id="add-product">+ Product</button></section>' +
+    '<article class="table-card"><div class="table-head"><span>Product</span><span>Classification</span><span>Selling price</span><span>Status</span></div><div class="table-body">' + body + '</div></article>';
+
+  document.querySelector('#add-product').onclick = function(){ productModal(); };
+  w.querySelectorAll('[data-product]').forEach(function(btn){
+    btn.onclick = function(){
+      const record = rows.find(function(row){ return row.id === btn.dataset.product; });
+      if (record) productModal(record);
+    };
+  });
+}
+
+function productModal(product) {
+  product = product || null;
+  const title = product ? 'Edit product' : 'New product';
+  const price = function(field){ return product ? ((product[field] || 0) / 100) : ''; };
+  const gst = product ? ((product.gst_bps || 0) / 100) : '';
+  modal(title,
+    '<label class="full">Product name<input required name="name" value="' + esc(product ? product.name : '') + '"></label>' +
+    '<label>SKU<input name="sku" value="' + esc(product ? product.sku : '') + '"></label><label>Brand<input name="brand" value="' + esc(product ? product.brand : '') + '"></label>' +
+    '<label>Category<input name="category" value="' + esc(product ? product.category : '') + '"></label><label>Model<input name="model" value="' + esc(product ? product.model : '') + '"></label>' +
+    '<label>Unit<input name="unit" value="' + esc(product ? product.unit : 'Nos') + '"></label><label>HSN / SAC<input name="hsn_sac" value="' + esc(product ? product.hsn_sac : '') + '"></label>' +
+    '<label>GST %<input name="gst_percent" type="number" min="0" max="100" step="0.01" value="' + esc(gst) + '"></label><label>Selling price<input name="selling_price" type="number" min="0" step="0.01" value="' + esc(price('selling_price_paise')) + '"></label>' +
+    '<label>Purchase price<input name="purchase_price" type="number" min="0" step="0.01" value="' + esc(price('purchase_price_paise')) + '"></label><label>MRP<input name="mrp" type="number" min="0" step="0.01" value="' + esc(price('mrp_paise')) + '"></label>' +
+    '<label>Min stock<input name="min_stock" type="number" min="0" step="0.001" value="' + esc(product ? product.min_stock : 0) + '"></label><label>Reorder level<input name="reorder_level" type="number" min="0" step="0.001" value="' + esc(product ? product.reorder_level : 0) + '"></label>' +
+    '<label>Serial tracking<select name="serial_tracking"><option value="0">No</option><option value="1"' + (product && product.serial_tracking ? ' selected' : '') + '>Yes</option></select></label>' +
+    '<label>Status<select name="status"><option value="active"' + (!product || product.status === 'active' ? ' selected' : '') + '>Active</option><option value="inactive"' + (product && product.status === 'inactive' ? ' selected' : '') + '>Inactive</option><option value="archived"' + (product && product.status === 'archived' ? ' selected' : '') + '>Archived</option></select></label>' +
+    '<label class="full">Description<textarea name="description">' + esc(product ? product.description : '') + '</textarea></label>',
+    function(payload){
+      if (!product) delete payload.status;
+      return api(product ? 'products/' + product.id : 'products', {method:product ? 'PATCH' : 'POST', body:payload});
+    }
+  );
+}
+
+async function quotations(w) {
+  const payload = await api('quotations');
+  const rows = payload.data;
+  let body = '<div class="empty-state"><b>No quotations yet</b><span>Create a quotation from Product Master items or custom lines.</span></div>';
+  if (rows.length) {
+    body = rows.map(function(q){
+      return '<button class="sales-row" data-open-quote="' + esc(q.id) + '"><span><b>' + esc(q.number) + '</b><small>v' + esc(q.version) + '</small></span><span><b>' + esc(q.customer_snapshot && q.customer_snapshot.name) + '</b><small>' + esc(q.customer_snapshot && q.customer_snapshot.mobile) + '</small></span><span><b>' + moneyPaise(q.totals && q.totals.grand_total_paise) + '</b><small>' + (q.items ? q.items.length : 0) + ' line(s)</small></span><span><i class="pill">' + esc(q.status) + '</i></span></button>';
+    }).join('');
+  }
+
+  w.innerHTML =
+    '<section class="page-head"><div><p class="eyebrow">SALES</p><h1>Quotations</h1><p>Commercial offers with exact tax snapshots, approval states and invoice conversion.</p></div><button class="primary" id="new-quotation">+ Quotation</button></section>' +
+    '<article class="table-card sales-card"><div class="sales-head"><span>Quotation</span><span>Customer</span><span>Total</span><span>Status</span></div>' + body + '</article>';
+
+  document.querySelector('#new-quotation').onclick = function(){ salesDocumentModal('quotation'); };
+  w.querySelectorAll('[data-open-quote]').forEach(function(btn){ btn.onclick = function(){ openQuotation(btn.dataset.openQuote); }; });
+}
+
+async function openQuotation(id) {
+  state.view = 'quotations';
+  const w = document.querySelector('#workspace');
+  w.innerHTML = '<div class="loading">Loading quotation…</div>';
+  try {
+    const payload = await api('quotations/' + id);
+    const q = payload.data;
+    const actions = quotationActions(q);
+    w.innerHTML =
+      '<button class="back" id="back-quotes">← Quotations</button>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(q.number) + ' · VERSION ' + esc(q.version) + '</p><h1>' + esc(q.customer_snapshot.name) + '</h1><p>' + esc(q.status) + (q.valid_until ? ' · valid until ' + esc(q.valid_until) : '') + '</p></div><div class="record-actions">' + actions + '</div></section>' +
+      salesDocumentDetail(q, 'Quotation') +
+      '<section class="dash-grid"><article class="panel"><p class="eyebrow">PAYMENT TERMS</p><p class="document-note">' + esc(q.payment_terms || '—') + '</p></article><article class="panel"><p class="eyebrow">DELIVERY / NOTES</p><p class="document-note">' + esc(q.delivery_terms || q.notes || '—') + '</p></article></section>';
+
+    document.querySelector('#back-quotes').onclick = function(){ quotations(w); };
+    bindQuotationActions(q, w);
+  } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
+function quotationActions(q) {
+  let html = '';
+  if (q.status === 'draft' || q.status === 'revised') html += '<button class="soft" data-qstatus="sent">Mark Sent</button>';
+  if (q.status === 'sent') html += '<button class="soft" data-qstatus="viewed">Mark Viewed</button>';
+  if (['draft','sent','viewed','revised'].includes(q.status)) html += '<button class="primary" data-qstatus="approved">Approve</button>';
+  if (['draft','sent','viewed','revised'].includes(q.status)) html += '<button class="soft" data-qstatus="rejected">Reject</button>';
+  if (q.status === 'approved') html += '<button class="primary" id="quote-to-invoice">Create Invoice</button>';
+  return html;
+}
+
+function bindQuotationActions(q, w) {
+  w.querySelectorAll('[data-qstatus]').forEach(function(btn){
+    btn.onclick = async function(){
+      try {
+        await api('quotations/' + q.id + '/status',{method:'PATCH',body:{status:btn.dataset.qstatus}});
+        toast('Quotation status updated');
+        openQuotation(q.id);
+      } catch(e) { toast(e.message,true); }
+    };
+  });
+  const invoice = document.querySelector('#quote-to-invoice');
+  if (invoice) invoice.onclick = async function(){
+    try {
+      const result = await api('quotations/' + q.id + '/invoice',{method:'POST',body:{}});
+      toast('Invoice ' + result.data.number + ' created');
+      openInvoice(result.data.id);
+    } catch(e) { toast(e.message,true); }
+  };
+}
+
+async function invoices(w) {
+  const payload = await api('invoices');
+  const rows = payload.data;
+  let body = '<div class="empty-state"><b>No invoices yet</b><span>Create a standalone invoice or convert an approved quotation.</span></div>';
+  if (rows.length) {
+    body = rows.map(function(inv){
+      return '<button class="sales-row" data-open-invoice="' + esc(inv.id) + '"><span><b>' + esc(inv.number) + '</b><small>' + (inv.quotation_id ? 'From quotation' : 'Standalone') + '</small></span><span><b>' + esc(inv.customer_snapshot && inv.customer_snapshot.name) + '</b><small>' + esc(inv.due_date || 'No due date') + '</small></span><span><b>' + moneyPaise(inv.totals && inv.totals.grand_total_paise) + '</b><small>' + (inv.items ? inv.items.length : 0) + ' line(s)</small></span><span><i class="pill">' + esc(inv.status) + '</i></span></button>';
+    }).join('');
+  }
+
+  w.innerHTML =
+    '<section class="page-head"><div><p class="eyebrow">SALES</p><h1>Invoices</h1><p>Standalone or quotation-derived invoices with immutable issued snapshots.</p></div><button class="primary" id="new-invoice">+ Invoice</button></section>' +
+    '<article class="table-card sales-card"><div class="sales-head"><span>Invoice</span><span>Customer</span><span>Total</span><span>Status</span></div>' + body + '</article>';
+
+  document.querySelector('#new-invoice').onclick = function(){ salesDocumentModal('invoice'); };
+  w.querySelectorAll('[data-open-invoice]').forEach(function(btn){ btn.onclick = function(){ openInvoice(btn.dataset.openInvoice); }; });
+}
+
+async function openInvoice(id) {
+  state.view = 'invoices';
+  const w = document.querySelector('#workspace');
+  w.innerHTML = '<div class="loading">Loading invoice…</div>';
+  try {
+    const payload = await api('invoices/' + id);
+    const inv = payload.data;
+    let actions = '';
+    if (inv.status === 'draft') actions += '<button class="primary" id="issue-invoice">Issue Invoice</button>';
+    if (['draft','issued'].includes(inv.status)) actions += '<button class="soft" id="void-invoice">Void</button>';
+
+    w.innerHTML =
+      '<button class="back" id="back-invoices">← Invoices</button>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(inv.number) + '</p><h1>' + esc(inv.customer_snapshot.name) + '</h1><p>' + esc(inv.status) + (inv.due_date ? ' · due ' + esc(inv.due_date) : '') + '</p></div><div class="record-actions">' + actions + '</div></section>' +
+      salesDocumentDetail(inv, 'Invoice') +
+      '<section class="dash-grid"><article class="panel"><p class="eyebrow">TERMS</p><p class="document-note">' + esc(inv.terms || '—') + '</p></article><article class="panel"><p class="eyebrow">SOURCE</p><p class="document-note">' + (inv.quotation_id ? 'Approved quotation linked' : 'Standalone invoice') + '</p></article></section>';
+
+    document.querySelector('#back-invoices').onclick = function(){ invoices(w); };
+    const issue = document.querySelector('#issue-invoice');
+    if (issue) issue.onclick = async function(){
+      try { await api('invoices/' + inv.id + '/issue',{method:'POST'}); toast('Invoice issued and locked'); openInvoice(inv.id); }
+      catch(e) { toast(e.message,true); }
+    };
+    const voidButton = document.querySelector('#void-invoice');
+    if (voidButton) voidButton.onclick = function(){ voidInvoiceModal(inv); };
+  } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
+function salesDocumentDetail(record, kind) {
+  const lines = (record.items || []).map(function(line){
+    return '<div class="doc-line"><span><b>' + esc(line.description) + '</b><small>' + esc(line.hsn_sac || '') + (line.unit ? ' · ' + esc(line.unit) : '') + '</small></span><span>' + esc(line.quantity) + '</span><span>' + moneyPaise(line.rate_paise) + '</span><span>' + ((line.discount_bps || 0) / 100) + '%</span><span>' + ((line.tax_bps || 0) / 100) + '%</span><strong>' + moneyPaise(line.line_total_paise) + '</strong></div>';
+  }).join('');
+
+  const t = record.totals || {};
+  return '<article class="panel document-panel"><div class="document-customer"><div><p class="eyebrow">' + esc(kind.toUpperCase()) + ' TO</p><h2>' + esc(record.customer_snapshot.name) + '</h2><p>' + esc(record.customer_snapshot.gstin || '') + '</p></div><div><p class="eyebrow">ADDRESS</p><p>' + esc(record.address_snapshot ? [record.address_snapshot.address,record.address_snapshot.city,record.address_snapshot.state,record.address_snapshot.pin].filter(Boolean).join(', ') : 'No address selected') + '</p></div></div><div class="doc-head"><span>Item</span><span>Qty</span><span>Rate</span><span>Disc.</span><span>Tax</span><span>Total</span></div><div class="doc-lines">' + lines + '</div><div class="doc-totals"><span>Taxable <b>' + moneyPaise(t.taxable_paise) + '</b></span><span>Tax <b>' + moneyPaise(t.tax_paise) + '</b></span><span>Round off <b>' + moneyPaise(t.round_off_paise) + '</b></span><strong>Grand Total ' + moneyPaise(t.grand_total_paise) + '</strong></div></article>';
+}
+
+function voidInvoiceModal(invoice) {
+  modal('Void invoice',
+    '<label class="full">Reason<textarea required name="reason" placeholder="Reason is recorded in the audit ledger"></textarea></label>',
+    async function(payload){
+      await api('invoices/' + invoice.id + '/void',{method:'POST',body:payload});
+      return function(){ openInvoice(invoice.id); };
+    }
+  );
+}
+
+async function salesDocumentModal(kind) {
+  const root = document.querySelector('#modal-root');
+  try {
+    const results = await Promise.all([api('customers'), api('products')]);
+    const customers = results[0].data;
+    const products = results[1].data.filter(function(p){ return p.status === 'active'; });
+    if (!customers.length) { toast('Create a customer before creating sales documents', true); return; }
+
+    const customerOptions = customers.map(function(c){ return '<option value="' + esc(c.id) + '">' + esc(c.name) + ' · ' + esc(c.number) + '</option>'; }).join('');
+    const productOptions = '<option value="">Custom item</option>' + products.map(function(p){ return '<option value="' + esc(p.id) + '">' + esc(p.name) + (p.sku ? ' · ' + esc(p.sku) : '') + '</option>'; }).join('');
+    const title = kind === 'quotation' ? 'New quotation' : 'New invoice';
+
+    root.innerHTML =
+      '<div class="modal-backdrop"><form class="modal sales-modal"><div class="modal-head"><div><p class="eyebrow">SALES</p><h2>' + title + '</h2></div><button type="button" class="icon-btn" data-close>×</button></div>' +
+      '<div class="form-grid"><label>Customer<select id="sales-customer" required name="customer_id"><option value="">Select customer</option>' + customerOptions + '</select></label><label>Address<select id="sales-address" name="address_id"><option value="">No address</option></select></label><label>Tax mode<select name="tax_mode"><option value="intra_state">CGST + SGST</option><option value="inter_state">IGST</option></select></label>' +
+      (kind === 'quotation' ? '<label>Valid until<input type="date" name="valid_until"></label><label class="full">Payment terms<input name="payment_terms" placeholder="e.g. 50% advance"></label>' : '<label>Due date<input type="date" name="due_date"></label><label class="full">Terms<input name="terms" placeholder="Payment terms"></label>') +
+      '</div><div class="sales-lines-head"><p class="eyebrow">LINE ITEMS</p><button type="button" class="soft" id="add-sales-line">+ Line</button></div><div id="sales-lines"></div><label class="sales-note">Notes<textarea name="notes"></textarea></label><div class="modal-actions"><button type="button" class="soft" data-close>Cancel</button><button class="primary" type="submit">Save ' + (kind === 'quotation' ? 'Quotation' : 'Invoice') + '</button></div></form></div>';
+
+    root.querySelectorAll('[data-close]').forEach(function(btn){ btn.onclick = function(){ root.innerHTML = ''; }; });
+    const lines = root.querySelector('#sales-lines');
+    let lineNumber = 0;
+
+    function addLine() {
+      lineNumber++;
+      const row = document.createElement('div');
+      row.className = 'sales-line-edit';
+      row.innerHTML =
+        '<select class="line-product">' + productOptions + '</select>' +
+        '<input class="line-description" required placeholder="Description">' +
+        '<input class="line-qty" type="number" required min="0.001" step="0.001" value="1" placeholder="Qty">' +
+        '<input class="line-rate" type="number" required min="0" step="0.01" placeholder="Rate">' +
+        '<input class="line-discount" type="number" min="0" max="100" step="0.01" value="0" placeholder="Disc %">' +
+        '<input class="line-tax" type="number" min="0" max="100" step="0.01" value="0" placeholder="Tax %">' +
+        '<input class="line-unit" value="Nos" placeholder="Unit">' +
+        '<input class="line-hsn" placeholder="HSN/SAC">' +
+        '<button type="button" class="icon-btn remove-line">×</button>';
+      lines.appendChild(row);
+
+      row.querySelector('.remove-line').onclick = function(){ if (lines.children.length > 1) row.remove(); };
+      row.querySelector('.line-product').onchange = function(e){
+        const product = products.find(function(p){ return p.id === e.target.value; });
+        if (!product) return;
+        row.querySelector('.line-description').value = product.name || '';
+        row.querySelector('.line-rate').value = ((product.selling_price_paise || 0) / 100).toFixed(2);
+        row.querySelector('.line-tax').value = ((product.gst_bps || 0) / 100).toFixed(2);
+        row.querySelector('.line-unit').value = product.unit || 'Nos';
+        row.querySelector('.line-hsn').value = product.hsn_sac || '';
+      };
+    }
+
+    addLine();
+    root.querySelector('#add-sales-line').onclick = addLine;
+
+    root.querySelector('#sales-customer').onchange = async function(e){
+      const addressSelect = root.querySelector('#sales-address');
+      addressSelect.innerHTML = '<option value="">No address</option>';
+      if (!e.target.value) return;
+      try {
+        const detail = await api('customers/' + e.target.value + '/overview');
+        detail.data.addresses.forEach(function(a){
+          const option = document.createElement('option');
+          option.value = a.id;
+          option.textContent = (a.label || a.type) + ' · ' + (a.city || a.address);
+          addressSelect.appendChild(option);
+        });
+      } catch(err) { toast(err.message,true); }
+    };
+
+    root.querySelector('form').onsubmit = async function(e){
+      e.preventDefault();
+      const form = new FormData(e.currentTarget);
+      const payload = Object.fromEntries(form.entries());
+      payload.items = Array.from(lines.querySelectorAll('.sales-line-edit')).map(function(row){
+        return {
+          product_id: row.querySelector('.line-product').value || null,
+          description: row.querySelector('.line-description').value,
+          quantity: row.querySelector('.line-qty').value,
+          rate: row.querySelector('.line-rate').value,
+          discount_percent: row.querySelector('.line-discount').value,
+          tax_percent: row.querySelector('.line-tax').value,
+          unit: row.querySelector('.line-unit').value,
+          hsn_sac: row.querySelector('.line-hsn').value
+        };
+      });
+      try {
+        const result = await api(kind === 'quotation' ? 'quotations' : 'invoices',{method:'POST',body:payload});
+        root.innerHTML = '';
+        toast((kind === 'quotation' ? 'Quotation ' : 'Invoice ') + result.data.number + ' created');
+        if (kind === 'quotation') openQuotation(result.data.id); else openInvoice(result.data.id);
+      } catch(err) { toast(err.message,true); }
+    };
+  } catch(e) { toast(e.message,true); }
+}
+
 function comingSoon(w) {
   const item = nav.find(function(n){ return n[0] === state.view; });
   const label = item ? item[1] : 'Module';
