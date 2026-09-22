@@ -20,6 +20,7 @@ use Ecrm\Domain\Inventory\MovementService;
 use Ecrm\Domain\Inventory\ProductUnitService;
 use Ecrm\Domain\Inventory\StockService;
 use Ecrm\Domain\Products\ProductService;
+use Ecrm\Domain\Reports\ReportingService;
 use Ecrm\Domain\Sales\InvoiceService;
 use Ecrm\Domain\Sales\QuotationService;
 use Ecrm\Domain\Sales\SalesCalculator;
@@ -41,6 +42,7 @@ final class ApiController
     private LeadConversionService $leadConversion;
     private ActivityService $activities;
     private ProductService $products;
+    private ReportingService $reports;
     private QuotationService $quotations;
     private InvoiceService $invoices;
     private PaymentBatchService $paymentBatches;
@@ -77,6 +79,7 @@ final class ApiController
         $this->payments = new PaymentService($this->store, $sequence, $this->search, $audit, $locks);
         $this->allocations = new AllocationService($this->store, $audit, $locks, $this->search);
         $this->receivables = new ReceivablesService($this->store, $this->allocations);
+        $this->reports = new ReportingService($this->store, $this->receivables);
         $this->locations = new LocationService($this->store, $sequence, $this->search, $audit);
         $this->movements = new MovementService($this->store, $audit, $locks, $sequence);
         $this->productUnits = new ProductUnitService($this->store, $this->search, $audit, $locks);
@@ -595,6 +598,20 @@ final class ApiController
             if (($segments[0] ?? '') === 'invoices' && isset($segments[1])
                 && ($segments[2] ?? '') === 'receivable' && $method === 'GET') {
                 $this->json(['data' => $this->receivables->invoiceSummary($segments[1])]);
+                return;
+            }
+
+            if ($segments === ['reports'] && $method === 'GET') {
+                $this->json(['data' => ReportingService::REPORTS]);
+                return;
+            }
+
+            if (($segments[0] ?? '') === 'reports' && isset($segments[1]) && $method === 'GET') {
+                $this->json(['data' => $this->reports->run($segments[1], [
+                    'date_from' => $_GET['date_from'] ?? null,
+                    'date_to' => $_GET['date_to'] ?? null,
+                    'customer_id' => $_GET['customer_id'] ?? null,
+                ])]);
                 return;
             }
 
