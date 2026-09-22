@@ -47,6 +47,14 @@ final class InvoiceService
 
     public function createFromQuotation(string $quotationId, array $input = []): array
     {
+        return $this->withNamedLock(
+            'sales-invoice',
+            fn(): array => $this->createFromQuotationUnlocked($quotationId, $input)
+        );
+    }
+
+    private function createFromQuotationUnlocked(string $quotationId, array $input = []): array
+    {
         foreach ($this->store->all('invoices') as $invoice) {
             if (($invoice['quotation_id'] ?? null) === $quotationId && ($invoice['status'] ?? '') !== 'void') {
                 return $invoice;
@@ -187,10 +195,15 @@ final class InvoiceService
 
     private function withFinanceLock(callable $callback): mixed
     {
+        return $this->withNamedLock('finance-allocation', $callback);
+    }
+
+    private function withNamedLock(string $name, callable $callback): mixed
+    {
         if ($this->lockRoot === null || $this->lockRoot === '') {
             return $callback();
         }
-        return (new ExclusiveLock($this->lockRoot, 'finance-allocation'))->run($callback);
+        return (new ExclusiveLock($this->lockRoot, $name))->run($callback);
     }
 
     private function persistNew(array $source): array
