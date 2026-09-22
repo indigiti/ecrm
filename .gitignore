@@ -1,0 +1,8 @@
+/node_modules/
+/vendor/
+/dist/
+/release/
+.env
+/storage/
+*.log
+.DS_Store
