@@ -7,6 +7,7 @@ define('ECRM_PRIVATE_ROOT', $root);
 require dirname(__DIR__) . '/app/bootstrap.php';
 
 use Ecrm\Audit\AuditLedger;
+use Ecrm\Domain\Admin\SettingsService;
 use Ecrm\Domain\Customers\AddressService;
 use Ecrm\Domain\Customers\CustomerService;
 use Ecrm\Domain\Products\ProductService;
@@ -41,12 +42,14 @@ try {
     $audit = new AuditLedger($root . '/audit');
     $sequence = new Sequence($root . '/data/sequences');
     $calculator = new SalesCalculator();
+    $settings = new SettingsService(new AtomicJsonStore($root . '/config'), $audit);
+    $settings->update(['company_name' => 'Sales Prefix Test', 'quote_prefix' => 'QTN', 'invoice_prefix' => 'BILL']);
 
     $customers = new CustomerService($store, $sequence, $search, $audit);
     $addresses = new AddressService($store, $search, $audit);
     $products = new ProductService($store, $sequence, $search, $audit);
-    $quotes = new QuotationService($store, $sequence, $search, $audit, $calculator);
-    $invoices = new InvoiceService($store, $sequence, $search, $audit, $calculator);
+    $quotes = new QuotationService($store, $sequence, $search, $audit, $calculator, $settings);
+    $invoices = new InvoiceService($store, $sequence, $search, $audit, $calculator, null, $settings);
 
     $customer = $customers->create([
         'name' => 'Phase 3 Customer',
@@ -88,7 +91,7 @@ try {
         'payment_terms' => '50% advance',
     ]);
 
-    expectSales(str_starts_with($quote['number'], 'QUO-'), 'Quotation number missing');
+    expectSales(str_starts_with($quote['number'], 'QTN-'), 'Configured quotation prefix not applied');
     expectSales($quote['totals']['gross_paise'] === 200000, 'Quotation gross calculation incorrect');
     expectSales($quote['totals']['discount_paise'] === 20000, 'Quotation discount calculation incorrect');
     expectSales($quote['totals']['taxable_paise'] === 180000, 'Quotation taxable calculation incorrect');
@@ -109,7 +112,7 @@ try {
     }
 
     $invoice = $invoices->createFromQuotation($quote['id'], ['due_date' => '2026-10-15']);
-    expectSales(str_starts_with($invoice['number'], 'INV-'), 'Invoice number missing');
+    expectSales(str_starts_with($invoice['number'], 'BILL-'), 'Configured invoice prefix not applied');
     expectSales($invoice['quotation_id'] === $quote['id'], 'Quotation link missing');
     expectSales($invoice['totals']['grand_total_paise'] === $quote['totals']['grand_total_paise'], 'Invoice does not preserve quotation totals');
 
