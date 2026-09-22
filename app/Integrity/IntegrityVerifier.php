@@ -28,6 +28,7 @@ final class IntegrityVerifier
             'locations' => $this->map('locations'),
             'product_units' => $this->map('product_units'),
             'inventory_movements' => $this->map('inventory_movements'),
+            'workshop_jobs' => $this->map('workshop_jobs'),
             'quotations' => $this->map('quotations'),
             'invoices' => $this->map('invoices'),
             'payment_batches' => $this->map('payment_batches'),
@@ -52,6 +53,7 @@ final class IntegrityVerifier
         $locations = $collections['locations'];
         $productUnits = $collections['product_units'];
         $inventoryMovements = $collections['inventory_movements'];
+        $workshopJobs = $collections['workshop_jobs'];
         $quotations = $collections['quotations'];
         $invoices = $collections['invoices'];
         $paymentBatches = $collections['payment_batches'];
@@ -62,6 +64,7 @@ final class IntegrityVerifier
         $this->checkUniqueField($leads, 'number', 'leads', $errors);
         $this->checkUniqueField($products, 'code', 'products', $errors);
         $this->checkUniqueField($locations, 'code', 'locations', $errors);
+        $this->checkUniqueField($workshopJobs, 'number', 'workshop_jobs', $errors);
         $this->checkUniqueField($quotations, 'number', 'quotations', $errors);
         $this->checkUniqueField($invoices, 'number', 'invoices', $errors);
         $this->checkUniqueField($paymentBatches, 'number', 'payment_batches', $errors);
@@ -477,6 +480,103 @@ final class IntegrityVerifier
                 if (($stock[$productId . ':' . $id] ?? 0) > 0) {
                     $warnings[] = "locations: {$id} is not active but still holds stock";
                     break;
+                }
+            }
+        }
+
+        $workshopStatuses = ['new','in_progress','waiting_parts','ready','completed','cancelled'];
+        $workshopPriorities = ['low','normal','high','urgent'];
+
+        foreach ($workshopJobs as $id => $row) {
+            $customerId = $row['customer_id'] ?? null;
+            $productId = $row['product_id'] ?? null;
+            $unitId = $row['product_unit_id'] ?? null;
+            $bayId = $row['workshop_location_id'] ?? null;
+            $ownership = (string) ($row['ownership'] ?? '');
+
+            if ($customerId && !isset($customers[(string) $customerId])) {
+                $errors[] = "workshop_jobs: {$id} references missing customer {$customerId}";
+            }
+            if ($productId && !isset($products[(string) $productId])) {
+                $errors[] = "workshop_jobs: {$id} references missing product {$productId}";
+            }
+            if ($unitId) {
+                if (!isset($productUnits[(string) $unitId])) {
+                    $errors[] = "workshop_jobs: {$id} references missing product unit {$unitId}";
+                } elseif (($productUnits[(string) $unitId]['product_id'] ?? null) !== $productId) {
+                    $errors[] = "workshop_jobs: {$id} unit does not match product";
+                }
+            }
+
+            if (!in_array($ownership, ['customer','company'], true)) {
+                $errors[] = "workshop_jobs: {$id} has invalid ownership";
+            }
+            if ($ownership === 'company' && !$unitId) {
+                $errors[] = "workshop_jobs: {$id} company asset has no serialized unit";
+            }
+            if (!in_array($row['status'] ?? '', $workshopStatuses, true)) {
+                $errors[] = "workshop_jobs: {$id} has invalid status";
+            }
+            if (!in_array($row['priority'] ?? '', $workshopPriorities, true)) {
+                $errors[] = "workshop_jobs: {$id} has invalid priority";
+            }
+            if (trim((string) ($row['reported_issue'] ?? '')) === '') {
+                $errors[] = "workshop_jobs: {$id} has no reported issue";
+            }
+
+            if ($bayId) {
+                if (!isset($locations[(string) $bayId])) {
+                    $errors[] = "workshop_jobs: {$id} references missing workshop bay {$bayId}";
+                } elseif (($locations[(string) $bayId]['type'] ?? '') !== 'workshop_bay') {
+                    $errors[] = "workshop_jobs: {$id} location is not a workshop bay";
+                }
+            }
+
+            $checkedIn = !empty($row['checked_in_at']);
+            $checkedOut = !empty($row['checked_out_at']);
+            if ($checkedOut && !$checkedIn) {
+                $errors[] = "workshop_jobs: {$id} is checked out without check-in";
+            }
+            if (($row['status'] ?? '') === 'completed' && empty($row['completed_at'])) {
+                $errors[] = "workshop_jobs: {$id} is completed without completed_at";
+            }
+            if (($row['status'] ?? '') === 'cancelled' && empty($row['cancelled_at'])) {
+                $errors[] = "workshop_jobs: {$id} is cancelled without cancelled_at";
+            }
+            if (in_array($row['status'] ?? '', ['completed','cancelled'], true) && $checkedIn && !$checkedOut) {
+                $errors[] = "workshop_jobs: {$id} is final while asset remains checked in";
+            }
+
+            if ($ownership === 'company') {
+                $checkInMovementId = $row['check_in_movement_id'] ?? null;
+                $checkOutMovementId = $row['check_out_movement_id'] ?? null;
+
+                if ($checkedIn) {
+                    $movement = $checkInMovementId ? ($inventoryMovements[(string) $checkInMovementId] ?? null) : null;
+                    if (!$movement
+                        || ($movement['type'] ?? '') !== 'workshop_in'
+                        || ($movement['reference_id'] ?? null) !== $id
+                        || ($movement['product_unit_id'] ?? null) !== $unitId
+                        || ($movement['to_location_id'] ?? null) !== $bayId) {
+                        $errors[] = "workshop_jobs: {$id} has invalid company asset check-in movement";
+                    }
+                }
+
+                if ($checkedOut) {
+                    $movement = $checkOutMovementId ? ($inventoryMovements[(string) $checkOutMovementId] ?? null) : null;
+                    if (!$movement
+                        || ($movement['type'] ?? '') !== 'workshop_out'
+                        || ($movement['reference_id'] ?? null) !== $id
+                        || ($movement['product_unit_id'] ?? null) !== $unitId
+                        || ($movement['from_location_id'] ?? null) !== $bayId) {
+                        $errors[] = "workshop_jobs: {$id} has invalid company asset check-out movement";
+                    }
+                } elseif ($checkedIn && $unitId && ($unitLocation[(string) $unitId] ?? null) !== $bayId) {
+                    $errors[] = "workshop_jobs: {$id} checked-in unit is not at assigned workshop bay";
+                }
+            } else {
+                if (!empty($row['check_in_movement_id']) || !empty($row['check_out_movement_id'])) {
+                    $errors[] = "workshop_jobs: {$id} customer asset must not use company inventory movements";
                 }
             }
         }
