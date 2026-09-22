@@ -6,6 +6,7 @@ namespace Ecrm\Domain\Sales;
 use Ecrm\Audit\AuditLedger;
 use Ecrm\Search\SearchIndex;
 use Ecrm\Storage\AtomicJsonStore;
+use Ecrm\Support\ExclusiveLock;
 use Ecrm\Support\Sequence;
 use Ecrm\Support\UuidV7;
 use InvalidArgumentException;
@@ -19,7 +20,8 @@ final class InvoiceService
         private Sequence $sequence,
         private SearchIndex $search,
         private AuditLedger $audit,
-        private SalesCalculator $calculator
+        private SalesCalculator $calculator,
+        private ?string $lockRoot = null
     ) {}
 
     public function create(array $input): array
@@ -140,32 +142,35 @@ final class InvoiceService
 
     public function void(string $id, string $reason): array
     {
-        $record = $this->get($id);
+        return $this->withFinanceLock(function () use ($id, $reason): array {
+            $record = $this->get($id);
 
-        $allocated = 0;
-        foreach ($this->store->all('payment_allocations') as $allocation) {
-            if (($allocation['invoice_id'] ?? null) === $id) {
-                $allocated += (int) ($allocation['amount_paise'] ?? 0);
+            $allocated = 0;
+            foreach ($this->store->all('payment_allocations') as $allocation) {
+                if (($allocation['invoice_id'] ?? null) === $id) {
+                    $allocated += (int) ($allocation['amount_paise'] ?? 0);
+                }
             }
-        }
-        if ($allocated !== 0) {
-            throw new InvalidArgumentException('Reverse payment allocations before voiding invoice');
-        }
+            if ($allocated !== 0) {
+                throw new InvalidArgumentException('Reverse payment allocations before voiding invoice');
+            }
 
-        if (!in_array($record['status'] ?? '', ['draft','issued'], true)) {
-            throw new InvalidArgumentException('Invoice cannot be voided in current status');
-        }
-        $reason = trim($reason);
-        if ($reason === '') throw new InvalidArgumentException('Void reason is required');
+            if (!in_array($record['status'] ?? '', ['draft','issued'], true)) {
+                throw new InvalidArgumentException('Invoice cannot be voided in current status');
+            }
 
-        $record['status'] = 'void';
-        $record['void_reason'] = $reason;
-        $record['voided_at'] = gmdate(DATE_ATOM);
-        $record['updated_at'] = gmdate(DATE_ATOM);
-        $this->store->put('invoices', $id, $record);
-        $this->index($record);
-        $this->audit->append('invoice.voided', 'invoice', $id, ['reason' => $reason]);
-        return $record;
+            $voidReason = trim($reason);
+            if ($voidReason === '') throw new InvalidArgumentException('Void reason is required');
+
+            $record['status'] = 'void';
+            $record['void_reason'] = $voidReason;
+            $record['voided_at'] = gmdate(DATE_ATOM);
+            $record['updated_at'] = gmdate(DATE_ATOM);
+            $this->store->put('invoices', $id, $record);
+            $this->index($record);
+            $this->audit->append('invoice.voided', 'invoice', $id, ['reason' => $voidReason]);
+            return $record;
+        });
     }
 
     public function get(string $id): array
@@ -178,6 +183,14 @@ final class InvoiceService
     public function all(): array
     {
         return $this->store->all('invoices');
+    }
+
+    private function withFinanceLock(callable $callback): mixed
+    {
+        if ($this->lockRoot === null || $this->lockRoot === '') {
+            return $callback();
+        }
+        return (new ExclusiveLock($this->lockRoot, 'finance-allocation'))->run($callback);
     }
 
     private function persistNew(array $source): array
