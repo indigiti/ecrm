@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Ecrm\Http;
 
 use Ecrm\Audit\AuditLedger;
+use Ecrm\Domain\Admin\BackupService;
 use Ecrm\Domain\Admin\SettingsService;
 use Ecrm\Domain\Admin\UserService;
 use Ecrm\Domain\CRM\ActivityService;
@@ -42,6 +43,7 @@ final class ApiController
     private AtomicJsonStore $store;
     private AuditLedger $audit;
     private SessionAuth $auth;
+    private BackupService $backups;
     private UserService $users;
     private SettingsService $settings;
     private DocumentService $documents;
@@ -80,6 +82,7 @@ final class ApiController
         $this->auth = new SessionAuth();
         $this->auth->start();
         $this->users = new UserService(new AtomicJsonStore(Runtime::usersRoot()), $audit);
+        $this->backups = new BackupService(Runtime::privateRoot(), $audit);
         $this->settings = new SettingsService(new AtomicJsonStore(Runtime::configRoot()), $audit);
         $this->documents = new DocumentService($this->store, $this->search, $audit, Runtime::uploadsRoot());
 
@@ -754,6 +757,25 @@ final class ApiController
                     )]);
                     return;
                 }
+            }
+
+            if ($segments === ['backups']) {
+                $this->requireRoles($currentUser, ['admin','manager']);
+                if ($method === 'GET') {
+                    $this->json(['data' => $this->backups->all()]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->backups->create()], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'backups' && isset($segments[1])
+                && ($segments[2] ?? '') === 'verify' && $method === 'POST') {
+                $this->requireRoles($currentUser, ['admin','manager']);
+                $this->json(['data' => $this->backups->verify($segments[1])]);
+                return;
             }
 
             if ($segments === ['settings']) {
