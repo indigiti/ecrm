@@ -58,7 +58,7 @@ try {
 
     $customers = new CustomerService($store, $sequence, $search, $audit);
     $invoices = new InvoiceService($store, $sequence, $search, $audit, $calculator, $root . '/locks');
-    $batches = new PaymentBatchService($store, $sequence, $search, $audit);
+    $batches = new PaymentBatchService($store, $sequence, $search, $audit, $root . '/locks');
     $payments = new PaymentService($store, $sequence, $search, $audit, $root . '/locks');
     $allocations = new AllocationService($store, $audit, $root . '/locks', $search);
     $receivables = new ReceivablesService($store, $allocations);
