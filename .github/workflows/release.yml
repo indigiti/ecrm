@@ -16,10 +16,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - run: find app public -name '*.php' -print0 | xargs -0 -n1 php -l
       - run: composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
-      - run: npm ci
+      - run: npm install
       - run: npm run build
       - run: php tools/package-release.php
       - uses: actions/upload-artifact@v4
