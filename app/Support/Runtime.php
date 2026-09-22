@@ -47,4 +47,24 @@ final class Runtime
     {
         return self::privateRoot() . '/locks';
     }
+
+    public static function usersRoot(): string
+    {
+        return self::privateRoot() . '/users';
+    }
+
+    public static function configRoot(): string
+    {
+        return self::privateRoot() . '/config';
+    }
+
+    public static function uploadsRoot(): string
+    {
+        return self::privateRoot() . '/uploads';
+    }
+
+    public static function sessionsRoot(): string
+    {
+        return self::privateRoot() . '/sessions';
+    }
 }
