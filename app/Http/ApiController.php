@@ -23,6 +23,7 @@ use Ecrm\Domain\Products\ProductService;
 use Ecrm\Domain\Sales\InvoiceService;
 use Ecrm\Domain\Sales\QuotationService;
 use Ecrm\Domain\Sales\SalesCalculator;
+use Ecrm\Domain\Workshop\WorkshopJobService;
 use Ecrm\Search\SearchIndex;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\Runtime;
@@ -50,6 +51,7 @@ final class ApiController
     private MovementService $movements;
     private ProductUnitService $productUnits;
     private StockService $stock;
+    private WorkshopJobService $workshopJobs;
     private SearchIndex $search;
 
     public function __construct()
@@ -79,6 +81,7 @@ final class ApiController
         $this->movements = new MovementService($this->store, $audit, $locks, $sequence);
         $this->productUnits = new ProductUnitService($this->store, $this->search, $audit, $locks);
         $this->stock = new StockService($this->store);
+        $this->workshopJobs = new WorkshopJobService($this->store, $sequence, $this->search, $audit, $this->movements, $this->stock, $locks);
     }
 
     public function handle(): void
@@ -375,6 +378,63 @@ final class ApiController
                 $unit = $this->productUnits->byQr($segments[2]);
                 $this->json(['data' => $this->stock->unitPosition((string) $unit['id'])]);
                 return;
+            }
+
+            if ($segments === ['workshop', 'jobs']) {
+                if ($method === 'GET') {
+                    $this->json([
+                        'data' => $this->workshopJobs->all(),
+                        'statuses' => WorkshopJobService::STATUSES,
+                        'priorities' => WorkshopJobService::PRIORITIES,
+                    ]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->workshopJobs->create($input)], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'workshop' && ($segments[1] ?? '') === 'jobs' && isset($segments[2])) {
+                $jobId = $segments[2];
+
+                if (count($segments) === 3 && $method === 'GET') {
+                    $job = $this->workshopJobs->get($jobId);
+                    $this->json(['data' => [
+                        'job' => $job,
+                        'customer' => !empty($job['customer_id']) ? $this->store->get('customers', (string) $job['customer_id']) : null,
+                        'product' => !empty($job['product_id']) ? $this->store->get('products', (string) $job['product_id']) : null,
+                        'unit' => !empty($job['product_unit_id']) ? $this->stock->unitPosition((string) $job['product_unit_id']) : null,
+                        'workshop_location' => !empty($job['workshop_location_id']) ? $this->store->get('locations', (string) $job['workshop_location_id']) : null,
+                    ]]);
+                    return;
+                }
+
+                if (count($segments) === 3 && in_array($method, ['PUT','PATCH'], true)) {
+                    $this->json(['data' => $this->workshopJobs->update($jobId, $input)]);
+                    return;
+                }
+
+                if (($segments[3] ?? '') === 'status' && in_array($method, ['PUT','PATCH'], true)) {
+                    $this->json(['data' => $this->workshopJobs->changeStatus(
+                        $jobId,
+                        (string) ($input['status'] ?? '')
+                    )]);
+                    return;
+                }
+
+                if (($segments[3] ?? '') === 'check-in' && $method === 'POST') {
+                    $this->json(['data' => $this->workshopJobs->checkIn($jobId)]);
+                    return;
+                }
+
+                if (($segments[3] ?? '') === 'check-out' && $method === 'POST') {
+                    $this->json(['data' => $this->workshopJobs->checkOut(
+                        $jobId,
+                        isset($input['destination_location_id']) ? (string) $input['destination_location_id'] : null
+                    )]);
+                    return;
+                }
             }
 
             if ($segments === ['quotations']) {
