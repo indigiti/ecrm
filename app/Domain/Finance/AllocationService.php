@@ -5,10 +5,10 @@ namespace Ecrm\Domain\Finance;
 
 use Ecrm\Audit\AuditLedger;
 use Ecrm\Storage\AtomicJsonStore;
+use Ecrm\Support\ExclusiveLock;
 use Ecrm\Support\Money;
 use Ecrm\Support\UuidV7;
 use InvalidArgumentException;
-use RuntimeException;
 
 final class AllocationService
 {
@@ -185,20 +185,6 @@ final class AllocationService
 
     private function withLock(callable $callback): mixed
     {
-        if (!is_dir($this->lockRoot) && !mkdir($this->lockRoot, 0770, true) && !is_dir($this->lockRoot)) {
-            throw new RuntimeException('Cannot create Finance lock directory');
-        }
-
-        $handle = fopen(rtrim($this->lockRoot, '/') . '/finance-allocation.lock', 'c+');
-        if (!$handle || !flock($handle, LOCK_EX)) {
-            throw new RuntimeException('Finance allocation lock failed');
-        }
-
-        try {
-            return $callback();
-        } finally {
-            flock($handle, LOCK_UN);
-            fclose($handle);
-        }
+        return (new ExclusiveLock($this->lockRoot, 'finance-allocation'))->run($callback);
     }
 }
