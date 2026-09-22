@@ -143,6 +143,7 @@ async function searchGlobal(query) {
         if (el.dataset.type === 'location') { state.view = 'inventory'; state.inventoryTab = 'locations'; shell(); }
         if (el.dataset.type === 'product_unit') { state.view = 'inventory'; shell(); setTimeout(function(){ openUnit(el.dataset.id); },0); }
         if (el.dataset.type === 'workshop_job') { state.view = 'workshop'; shell(); setTimeout(function(){ openWorkshopJob(el.dataset.id); },0); }
+        if (el.dataset.type === 'document') { state.view = 'documents'; shell(); }
         if (el.dataset.type === 'quotation') { state.view = 'quotations'; shell(); }
         if (el.dataset.type === 'invoice') { state.view = 'invoices'; shell(); }
         if (el.dataset.type === 'payment') { state.view = 'payments'; shell(); setTimeout(function(){ openPayment(el.dataset.id); },0); }
@@ -236,7 +237,7 @@ async function openCustomer(id) {
     const data = payload.data, c = data.customer;
     w.innerHTML =
       '<button class="back" id="back-customers">← Customers</button>' +
-      '<section class="record-head"><div><p class="eyebrow">' + esc(c.number) + ' · ' + esc(c.status) + '</p><h1>' + esc(c.name) + '</h1><p>' + esc(c.category || 'Customer') + (c.gstin ? ' · GSTIN ' + esc(c.gstin) : '') + '</p></div><div class="record-actions"><button class="soft" id="customer-statement">Statement</button><button class="soft" id="edit-customer">Edit</button><button class="soft" id="add-contact">+ Contact</button><button class="soft" id="add-address">+ Address</button><button class="primary" id="add-followup-customer">+ Follow-up</button></div></section>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(c.number) + ' · ' + esc(c.status) + '</p><h1>' + esc(c.name) + '</h1><p>' + esc(c.category || 'Customer') + (c.gstin ? ' · GSTIN ' + esc(c.gstin) : '') + '</p></div><div class="record-actions"><button class="soft" id="customer-statement">Statement</button>' + (state.currentUser && state.currentUser.role !== 'read_only' ? '<button class="soft" id="customer-document">+ Document</button>' : '') + '<button class="soft" id="edit-customer">Edit</button><button class="soft" id="add-contact">+ Contact</button><button class="soft" id="add-address">+ Address</button><button class="primary" id="add-followup-customer">+ Follow-up</button></div></section>' +
       '<section class="customer-grid">' +
         '<article class="panel"><p class="eyebrow">CUSTOMER</p><dl><dt>Contact</dt><dd>' + esc(c.contact_person || '—') + '</dd><dt>Mobile</dt><dd>' + esc(c.mobile || '—') + '</dd><dt>Email</dt><dd>' + esc(c.email || '—') + '</dd><dt>GSTIN</dt><dd>' + esc(c.gstin || '—') + '</dd></dl></article>' +
         '<article class="panel"><p class="eyebrow">UP NEXT</p>' + nextActivity(data.activities) + '</article>' +
@@ -246,9 +247,12 @@ async function openCustomer(id) {
         '<article class="panel span2"><p class="eyebrow">RECENT BUSINESS</p>' + customerBusiness(data.quotations || [], data.invoices || []) + '</article>' +
         '<article class="panel"><p class="eyebrow">RECEIVABLES</p>' + customerReceivables(data.receivables) + '</article>' +
         '<article class="panel span2"><p class="eyebrow">PAYMENTS</p>' + customerPayments(data.payments || []) + '</article>' +
+        '<article class="panel span2"><p class="eyebrow">DOCUMENTS</p>' + customerDocuments(data.documents || []) + '</article>' +
       '</section>';
     document.querySelector('#back-customers').onclick = function(){ customers(w); };
     document.querySelector('#customer-statement').onclick = function(){ openCustomerStatement(id); };
+    const customerDocument = document.querySelector('#customer-document');
+    if (customerDocument) customerDocument.onclick = function(){ documentUploadModal('customer',id,'customer'); };
     document.querySelector('#edit-customer').onclick = function(){ customerEditModal(c); };
     document.querySelector('#add-contact').onclick = function(){ contactModal(id); };
     document.querySelector('#add-address').onclick = function(){ addressModal(id); };
@@ -256,6 +260,7 @@ async function openCustomer(id) {
     w.querySelectorAll('[data-edit-contact]').forEach(function(btn){ btn.onclick = function(){ var record = data.contacts.find(function(x){ return x.id === btn.dataset.editContact; }); if (record) contactEditModal(record); }; });
     w.querySelectorAll('[data-edit-address]').forEach(function(btn){ btn.onclick = function(){ var record = data.addresses.find(function(x){ return x.id === btn.dataset.editAddress; }); if (record) addressEditModal(record); }; });
     w.querySelectorAll('[data-payment]').forEach(function(btn){ btn.onclick = function(){ openPayment(btn.dataset.payment); }; });
+    w.querySelectorAll('[data-customer-document]').forEach(function(btn){ btn.onclick = function(){ window.location.href='./api/documents/' + encodeURIComponent(btn.dataset.customerDocument) + '/download'; }; });
   } catch (e) {
     w.innerHTML = errorCard(e.message);
   }
@@ -293,6 +298,13 @@ function customerReceivables(receivables) {
     return sum + Number(buckets[key] ? buckets[key].amount_paise || 0 : 0);
   }, 0);
   return '<div class="finance-summary"><strong>' + moneyPaise(receivables.total_outstanding_paise || 0) + '</strong><span>Outstanding</span><small>' + moneyPaise(overdue) + ' overdue</small></div>';
+}
+
+function customerDocuments(rows) {
+  if (!rows.length) return '<div class="empty-small">No customer documents.</div>';
+  return '<div class="business-list">' + rows.slice(0,8).map(function(doc){
+    return '<button class="business-button" data-customer-document="' + esc(doc.id) + '"><span><b>' + esc(doc.title) + '</b><small>' + esc(doc.original_name) + ' · ' + esc(doc.category) + '</small></span><i class="pill">' + esc(doc.status) + '</i></button>';
+  }).join('') + '</div>';
 }
 
 function customerPayments(rows) {
