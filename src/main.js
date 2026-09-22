@@ -1675,6 +1675,216 @@ function exportReportCsv(data) {
   setTimeout(function(){ URL.revokeObjectURL(url); },0);
 }
 
+
+async function documentsWorkspace(w) {
+  try {
+    const rows = (await api('documents')).data;
+    const canModify = state.currentUser && state.currentUser.role !== 'read_only';
+    const canArchive = state.currentUser && ['admin','manager'].includes(state.currentUser.role);
+
+    const body = rows.length ? rows.map(function(doc){
+      return '<div class="document-row"><span><b>' + esc(doc.title) + '</b><small>' + esc(doc.original_name) + ' · ' + formatBytes(doc.size_bytes) + '</small></span><span><b>' + esc(doc.category) + '</b><small>' + esc(doc.entity_type) + (doc.entity_id ? ' · linked' : '') + '</small></span><span><i class="pill">' + esc(doc.status) + '</i></span><span class="document-actions"><button class="soft" data-download-doc="' + esc(doc.id) + '">Download</button>' + (canArchive && doc.status === 'active' ? '<button class="soft" data-archive-doc="' + esc(doc.id) + '">Archive</button>' : '') + '</span></div>';
+    }).join('') : '<div class="empty-state"><b>No documents yet</b><span>Upload PDFs, images, spreadsheets or office documents to persistent private storage.</span></div>';
+
+    w.innerHTML =
+      '<section class="page-head"><div><p class="eyebrow">DOCUMENTS</p><h1>Private Documents</h1><p>Files stay outside the public web root and are downloaded through authenticated routes.</p></div>' + (canModify ? '<button class="primary" id="upload-document">+ Upload</button>' : '') + '</section>' +
+      '<article class="table-card document-card"><div class="document-head"><span>Document</span><span>Category / Link</span><span>Status</span><span>Actions</span></div>' + body + '</article>';
+
+    const upload = document.querySelector('#upload-document');
+    if (upload) upload.onclick = function(){ documentUploadModal(); };
+    w.querySelectorAll('[data-download-doc]').forEach(function(btn){
+      btn.onclick = function(){ window.location.href = './api/documents/' + encodeURIComponent(btn.dataset.downloadDoc) + '/download'; };
+    });
+    w.querySelectorAll('[data-archive-doc]').forEach(function(btn){
+      btn.onclick = function(){ archiveDocumentModal(btn.dataset.archiveDoc); };
+    });
+  } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return value + ' B';
+  if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB';
+  return (value / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function documentUploadModal(entityType, entityId, category) {
+  entityType = entityType || 'general';
+  entityId = entityId || '';
+  category = category || 'general';
+  const root = document.querySelector('#modal-root');
+
+  root.innerHTML =
+    '<div class="modal-backdrop"><form class="modal document-upload-modal"><div class="modal-head"><div><p class="eyebrow">DOCUMENTS</p><h2>Upload document</h2></div><button type="button" class="icon-btn" data-close>×</button></div><div class="form-grid">' +
+    '<label class="full">File<input required type="file" name="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.txt,.csv,.xlsx,.xls,.docx,.doc"></label>' +
+    '<label class="full">Title<input name="title"></label><label>Category<input name="category" value="' + esc(category) + '"></label><label>Entity type<input name="entity_type" value="' + esc(entityType) + '"></label>' +
+    '<label class="full">Entity ID<input name="entity_id" value="' + esc(entityId) + '"></label><label class="full">Notes<textarea name="notes"></textarea></label>' +
+    '</div><div class="modal-actions"><button type="button" class="soft" data-close>Cancel</button><button class="primary" type="submit">Upload</button></div></form></div>';
+
+  root.querySelectorAll('[data-close]').forEach(function(btn){ btn.onclick = function(){ root.innerHTML=''; }; });
+  root.querySelector('form').onsubmit = async function(e){
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    try {
+      const result = await api('documents',{method:'POST',body:form});
+      root.innerHTML = '';
+      toast('Document uploaded');
+      if (entityType === 'customer' && entityId) openCustomer(entityId);
+      else if (entityType === 'settings') settingsWorkspace(document.querySelector('#workspace'));
+      else documentsWorkspace(document.querySelector('#workspace'));
+      return result;
+    } catch(err) { toast(err.message,true); }
+  };
+}
+
+function archiveDocumentModal(id) {
+  modal('Archive document',
+    '<label class="full">Reason<textarea required name="reason"></textarea></label>',
+    async function(payload){
+      await api('documents/' + id + '/archive',{method:'POST',body:payload});
+      return function(){ documentsWorkspace(document.querySelector('#workspace')); };
+    }
+  );
+}
+
+async function settingsWorkspace(w) {
+  const tab = state.settingsTab || 'company';
+  const tabs = [['company','Company'],['account','My Account']];
+  if (state.currentUser && state.currentUser.role === 'admin') tabs.splice(1,0,['users','Users']);
+
+  w.innerHTML =
+    '<section class="page-head"><div><p class="eyebrow">ADMINISTRATION</p><h1>Settings</h1><p>Company identity, billing defaults, users and account security.</p></div></section>' +
+    '<div class="finance-tabs settings-tabs">' + tabs.map(function(item){ return '<button data-settings-tab="' + item[0] + '" class="' + (item[0] === tab ? 'active' : '') + '">' + item[1] + '</button>'; }).join('') + '</div><div id="settings-content"><div class="loading">Loading settings…</div></div>';
+
+  w.querySelectorAll('[data-settings-tab]').forEach(function(btn){
+    btn.onclick = function(){ state.settingsTab=btn.dataset.settingsTab; settingsWorkspace(w); };
+  });
+
+  if (tab === 'company') return companySettings(document.querySelector('#settings-content'));
+  if (tab === 'users') return usersSettings(document.querySelector('#settings-content'));
+  return accountSettings(document.querySelector('#settings-content'));
+}
+
+async function companySettings(root) {
+  try {
+    const settings = (await api('settings')).data;
+    state.companySettings = settings;
+    const canEdit = state.currentUser && ['admin','manager'].includes(state.currentUser.role);
+    const logo = settings.logo_document_id ? '<img class="settings-brand-preview" src="./api/documents/' + encodeURIComponent(settings.logo_document_id) + '/content" alt="Company logo">' : '<div class="settings-brand-placeholder">No logo</div>';
+    const signature = settings.signature_document_id ? '<img class="settings-signature-preview" src="./api/documents/' + encodeURIComponent(settings.signature_document_id) + '/content" alt="Signature">' : '<div class="settings-brand-placeholder">No signature</div>';
+
+    root.innerHTML =
+      '<form id="company-settings-form" class="panel settings-form"><div class="settings-section-head"><div><p class="eyebrow">COMPANY</p><h2>Identity & Billing</h2></div>' + (canEdit ? '<button class="primary" type="submit">Save Settings</button>' : '<span class="pill">View only</span>') + '</div>' +
+      '<div class="settings-brand-grid"><div><p class="eyebrow">LOGO</p>' + logo + (canEdit ? '<input id="settings-logo" type="file" accept=".jpg,.jpeg,.png,.webp">' : '') + '</div><div><p class="eyebrow">SIGNATURE</p>' + signature + (canEdit ? '<input id="settings-signature" type="file" accept=".jpg,.jpeg,.png,.webp">' : '') + '</div></div>' +
+      '<div class="form-grid">' +
+      '<label class="full">Company name<input required name="company_name" value="' + esc(settings.company_name || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>Legal name<input name="legal_name" value="' + esc(settings.legal_name || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>Phone<input name="phone" value="' + esc(settings.phone || '') + '"' + (canEdit ? '' : ' disabled') + '></label>' +
+      '<label>Email<input name="email" type="email" value="' + esc(settings.email || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>Website<input name="website" value="' + esc(settings.website || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>GSTIN<input name="gstin" value="' + esc(settings.gstin || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>PAN<input name="pan" value="' + esc(settings.pan || '') + '"' + (canEdit ? '' : ' disabled') + '></label>' +
+      '<label class="full">Address<textarea name="address"' + (canEdit ? '' : ' disabled') + '>' + esc(settings.address || '') + '</textarea></label><label>City<input name="city" value="' + esc(settings.city || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>State<input name="state" value="' + esc(settings.state || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>PIN<input name="pin" value="' + esc(settings.pin || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>Country<input name="country" value="' + esc(settings.country || '') + '"' + (canEdit ? '' : ' disabled') + '></label>' +
+      '<label>Bank name<input name="bank_name" value="' + esc(settings.bank_name || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>Account name<input name="bank_account_name" value="' + esc(settings.bank_account_name || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>Account number<input name="bank_account_number" value="' + esc(settings.bank_account_number || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>IFSC<input name="bank_ifsc" value="' + esc(settings.bank_ifsc || '') + '"' + (canEdit ? '' : ' disabled') + '></label><label>UPI ID<input name="upi_id" value="' + esc(settings.upi_id || '') + '"' + (canEdit ? '' : ' disabled') + '></label>' +
+      '<label>Quote prefix<input name="quote_prefix" value="' + esc(settings.quote_prefix || 'QUO') + '"' + (canEdit ? '' : ' disabled') + '></label><label>Invoice prefix<input name="invoice_prefix" value="' + esc(settings.invoice_prefix || 'INV') + '"' + (canEdit ? '' : ' disabled') + '></label><label>Payment prefix<input name="payment_prefix" value="' + esc(settings.payment_prefix || 'PAY') + '"' + (canEdit ? '' : ' disabled') + '></label><label>FY start month<input name="financial_year_start_month" type="number" min="1" max="12" value="' + esc(settings.financial_year_start_month || 4) + '"' + (canEdit ? '' : ' disabled') + '></label><label>Currency<input name="currency" value="' + esc(settings.currency || 'INR') + '"' + (canEdit ? '' : ' disabled') + '></label><label>Default tax %<input name="default_tax_percent" type="number" min="0" max="100" step="0.01" value="' + esc((settings.default_tax_bps || 0)/100) + '"' + (canEdit ? '' : ' disabled') + '></label>' +
+      '<label class="full">Quotation terms<textarea name="quotation_terms"' + (canEdit ? '' : ' disabled') + '>' + esc(settings.quotation_terms || '') + '</textarea></label><label class="full">Invoice terms<textarea name="invoice_terms"' + (canEdit ? '' : ' disabled') + '>' + esc(settings.invoice_terms || '') + '</textarea></label><label class="full">Footer text<textarea name="footer_text"' + (canEdit ? '' : ' disabled') + '>' + esc(settings.footer_text || '') + '</textarea></label>' +
+      '</div></form>';
+
+    if (!canEdit) return;
+    document.querySelector('#company-settings-form').onsubmit = async function(e){
+      e.preventDefault();
+      const payload = Object.fromEntries(new FormData(e.currentTarget).entries());
+      let logoId = settings.logo_document_id || '';
+      let signatureId = settings.signature_document_id || '';
+
+      try {
+        const logoFile = document.querySelector('#settings-logo').files[0];
+        if (logoFile) logoId = (await uploadSettingsAsset(logoFile,'logo','Company Logo')).id;
+        const signatureFile = document.querySelector('#settings-signature').files[0];
+        if (signatureFile) signatureId = (await uploadSettingsAsset(signatureFile,'signature','Company Signature')).id;
+
+        payload.logo_document_id = logoId;
+        payload.signature_document_id = signatureId;
+        const result = await api('settings',{method:'PATCH',body:payload});
+        state.companySettings = result.data;
+        toast('Company settings saved');
+        shell();
+        state.view='settings'; state.settingsTab='company';
+        setTimeout(function(){ settingsWorkspace(document.querySelector('#workspace')); },0);
+      } catch(err) { toast(err.message,true); }
+    };
+  } catch(e) { root.innerHTML = errorCard(e.message); }
+}
+
+async function uploadSettingsAsset(file, category, title) {
+  const form = new FormData();
+  form.append('file',file);
+  form.append('title',title);
+  form.append('category',category);
+  form.append('entity_type','settings');
+  form.append('entity_id','primary');
+  return (await api('documents',{method:'POST',body:form})).data;
+}
+
+async function usersSettings(root) {
+  if (!state.currentUser || state.currentUser.role !== 'admin') {
+    root.innerHTML = errorCard('Administrator access is required.');
+    return;
+  }
+
+  try {
+    const payload = await api('users');
+    const rows = payload.data;
+    root.innerHTML =
+      '<article class="panel"><div class="settings-section-head"><div><p class="eyebrow">USERS</p><h2>Access & Roles</h2></div><button class="primary" id="new-user">+ User</button></div><div class="user-list">' +
+      (rows.length ? rows.map(function(user){
+        return '<div class="user-row"><span><b>' + esc(user.name) + '</b><small>' + esc(user.email) + '</small></span><span><i class="pill">' + esc(user.role) + '</i></span><span><i class="pill">' + esc(user.status) + '</i></span><div><button class="soft" data-edit-user="' + esc(user.id) + '">Edit</button><button class="soft" data-password-user="' + esc(user.id) + '">Reset Password</button></div></div>';
+      }).join('') : '<div class="empty-small">No users.</div>') + '</div></article>';
+
+    document.querySelector('#new-user').onclick = function(){ userModal(null,payload.roles); };
+    root.querySelectorAll('[data-edit-user]').forEach(function(btn){
+      const user = rows.find(function(row){ return row.id === btn.dataset.editUser; });
+      btn.onclick = function(){ if(user) userModal(user,payload.roles); };
+    });
+    root.querySelectorAll('[data-password-user]').forEach(function(btn){
+      btn.onclick = function(){ resetUserPasswordModal(btn.dataset.passwordUser); };
+    });
+  } catch(e) { root.innerHTML = errorCard(e.message); }
+}
+
+function userModal(user, roles) {
+  const roleOptions = roles.map(function(role){ return '<option value="' + role + '"' + (user && user.role === role ? ' selected' : '') + '>' + role.replaceAll('_',' ') + '</option>'; }).join('');
+  modal(user ? 'Edit user' : 'New user',
+    '<label class="full">Name<input required name="name" value="' + esc(user ? user.name : '') + '"></label>' +
+    (user ? '' : '<label class="full">Email<input required type="email" name="email"></label><label class="full">Password<input required minlength="12" type="password" name="password"></label>') +
+    '<label>Role<select name="role">' + roleOptions + '</select></label>' + (user ? '<label>Status<select name="status"><option value="active"' + (user.status === 'active' ? ' selected' : '') + '>Active</option><option value="inactive"' + (user.status === 'inactive' ? ' selected' : '') + '>Inactive</option></select></label>' : ''),
+    async function(payload){
+      await api(user ? 'users/' + user.id : 'users',{method:user ? 'PATCH' : 'POST',body:payload});
+      return function(){ state.settingsTab='users'; settingsWorkspace(document.querySelector('#workspace')); };
+    }
+  );
+}
+
+function resetUserPasswordModal(id) {
+  modal('Reset user password',
+    '<label class="full">New password<input required minlength="12" type="password" name="password"></label>',
+    async function(payload){
+      await api('users/' + id + '/password',{method:'POST',body:payload});
+      return function(){ state.settingsTab='users'; settingsWorkspace(document.querySelector('#workspace')); };
+    }
+  );
+}
+
+function accountSettings(root) {
+  const user = state.currentUser || {};
+  root.innerHTML =
+    '<section class="dash-grid account-settings-grid"><article class="panel"><p class="eyebrow">SIGNED IN AS</p><h2>' + esc(user.name || '') + '</h2><dl><dt>Email</dt><dd>' + esc(user.email || '') + '</dd><dt>Role</dt><dd>' + esc(user.role || '') + '</dd><dt>Status</dt><dd>' + esc(user.status || '') + '</dd></dl></article><form id="password-form" class="panel settings-form"><p class="eyebrow">SECURITY</p><h2>Change Password</h2><div class="form-grid"><label class="full">Current password<input required type="password" name="current_password"></label><label class="full">New password<input required minlength="12" type="password" name="new_password"></label></div><div class="modal-actions"><button class="primary" type="submit">Change Password</button></div></form></section>';
+
+  document.querySelector('#password-form').onsubmit = async function(e){
+    e.preventDefault();
+    try {
+      await api('auth/password',{method:'POST',body:Object.fromEntries(new FormData(e.currentTarget).entries())});
+      e.currentTarget.reset();
+      toast('Password changed');
+    } catch(err) { toast(err.message,true); }
+  };
+}
+
 function comingSoon(w) {
   const item = nav.find(function(n){ return n[0] === state.view; });
   const label = item ? item[1] : 'Module';
