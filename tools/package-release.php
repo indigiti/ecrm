@@ -38,8 +38,10 @@ copytree($root . '/vendor', $release . '/private/vendor');
 copytree($root . '/workers', $release . '/private/workers');
 
 if (!is_dir($release . '/private/tools')) mkdir($release . '/private/tools', 0775, true);
-if (is_file($root . '/tools/apply-geocodes.php')) {
-    copy($root . '/tools/apply-geocodes.php', $release . '/private/tools/apply-geocodes.php');
+foreach (['apply-geocodes.php', 'rebuild-search.php', 'verify-integrity.php'] as $tool) {
+    if (is_file($root . '/tools/' . $tool)) {
+        copy($root . '/tools/' . $tool, $release . '/private/tools/' . $tool);
+    }
 }
 
 if (is_dir($root . '/dist/assets')) {
@@ -63,6 +65,8 @@ $meta = [
     'runtime_commands' => [
         'geocode_provider' => 'python3 workers/geocode.py',
         'apply_geocodes' => 'php tools/apply-geocodes.php',
+        'rebuild_search' => 'php tools/rebuild-search.php',
+        'verify_integrity' => 'php tools/verify-integrity.php',
     ],
 ];
 
