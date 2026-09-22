@@ -76,7 +76,7 @@ final class ApiController
         $this->allocations = new AllocationService($this->store, $audit, $locks, $this->search);
         $this->receivables = new ReceivablesService($this->store, $this->allocations);
         $this->locations = new LocationService($this->store, $sequence, $this->search, $audit);
-        $this->movements = new MovementService($this->store, $audit, $locks);
+        $this->movements = new MovementService($this->store, $audit, $locks, $sequence);
         $this->productUnits = new ProductUnitService($this->store, $this->search, $audit, $locks);
         $this->stock = new StockService($this->store);
     }
