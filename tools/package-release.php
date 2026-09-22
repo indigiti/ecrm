@@ -47,9 +47,8 @@ foreach (['apply-geocodes.php', 'rebuild-search.php', 'verify-integrity.php'] as
 if (is_dir($root . '/dist/assets')) {
     copytree($root . '/dist/assets', $release . '/public/assets');
 }
-if (is_file($root . '/dist/.vite/manifest.json')) {
-    if (!is_dir($release . '/public/.vite')) mkdir($release . '/public/.vite', 0775, true);
-    copy($root . '/dist/.vite/manifest.json', $release . '/public/.vite/manifest.json');
+if (is_file($root . '/dist/manifest.json')) {
+    copy($root . '/dist/manifest.json', $release . '/public/manifest.json');
 }
 
 $sha = trim((string) getenv('GITHUB_SHA')) ?: 'local';
