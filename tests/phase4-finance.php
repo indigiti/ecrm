@@ -16,7 +16,9 @@ use Ecrm\Domain\Finance\PaymentService;
 use Ecrm\Domain\Finance\ReceivablesService;
 use Ecrm\Domain\Sales\InvoiceService;
 use Ecrm\Domain\Sales\SalesCalculator;
+use Ecrm\Integrity\IntegrityVerifier;
 use Ecrm\Search\SearchIndex;
+use Ecrm\Search\SearchRebuilder;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\Sequence;
 use InvalidArgumentException;
@@ -55,10 +57,10 @@ try {
     $calculator = new SalesCalculator();
 
     $customers = new CustomerService($store, $sequence, $search, $audit);
-    $invoices = new InvoiceService($store, $sequence, $search, $audit, $calculator);
+    $invoices = new InvoiceService($store, $sequence, $search, $audit, $calculator, $root . '/locks');
     $batches = new PaymentBatchService($store, $sequence, $search, $audit);
-    $payments = new PaymentService($store, $sequence, $search, $audit);
-    $allocations = new AllocationService($store, $audit, $root . '/locks');
+    $payments = new PaymentService($store, $sequence, $search, $audit, $root . '/locks');
+    $allocations = new AllocationService($store, $audit, $root . '/locks', $search);
     $receivables = new ReceivablesService($store, $allocations);
 
     $customer = $customers->create([
@@ -207,6 +209,15 @@ try {
         ]),
         'Payment batch is closed'
     );
+
+    $rebuilt = (new SearchRebuilder($store, $search))->rebuild();
+    expectFinance(($rebuilt['payment_batches'] ?? 0) === 1, 'Payment batch search rebuild count incorrect');
+    expectFinance(($rebuilt['payments'] ?? 0) === 3, 'Payment search rebuild count incorrect');
+    expectFinance(count($search->search('UTR-ONE')) === 1, 'Payment reference not searchable after rebuild');
+
+    $integrity = (new IntegrityVerifier($store, $root . '/audit'))->verify();
+    expectFinance($integrity['ok'] === true, 'Finance integrity verification failed: ' . implode('; ', $integrity['errors']));
+    expectFinance(($integrity['checked']['payment_allocations'] ?? 0) === 6, 'Allocation integrity count incorrect');
 
     echo "Phase 4 finance test passed\n";
 } finally {
