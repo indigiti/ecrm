@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Ecrm\Domain\Sales;
 
 use Ecrm\Audit\AuditLedger;
+use Ecrm\Domain\Admin\SettingsService;
 use Ecrm\Search\SearchIndex;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\Sequence;
@@ -19,7 +20,8 @@ final class QuotationService
         private Sequence $sequence,
         private SearchIndex $search,
         private AuditLedger $audit,
-        private SalesCalculator $calculator
+        private SalesCalculator $calculator,
+        private ?SettingsService $settings = null
     ) {}
 
     public function create(array $input): array
@@ -33,10 +35,11 @@ final class QuotationService
         );
 
         $year = gmdate('Y');
+        $prefix = (string) (($this->settings?->get()['quote_prefix'] ?? null) ?: 'QUO');
         $now = gmdate(DATE_ATOM);
         $record = [
             'id' => UuidV7::generate(),
-            'number' => $this->sequence->next('quotations-' . $year, 'QUO-' . $year . '-'),
+            'number' => $this->sequence->next('quotations-' . $year, $prefix . '-' . $year . '-'),
             'customer_id' => $customer['id'],
             'address_id' => $address['id'] ?? null,
             'customer_snapshot' => $this->customerSnapshot($customer),
