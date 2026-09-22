@@ -160,6 +160,52 @@ final class SearchRebuilder
             ];
         }
 
+        foreach ($this->store->all('payment_batches') as $row) {
+            $entries[] = [
+                'type' => 'payment_batch',
+                'id' => $row['id'],
+                'label' => $row['number'],
+                'terms' => [
+                    $row['title'] ?? '',
+                    $row['batch_date'] ?? '',
+                    $row['status'] ?? '',
+                ],
+                'meta' => [
+                    'number' => $row['number'] ?? null,
+                    'customer_id' => $row['customer_id'] ?? null,
+                    'status' => $row['status'] ?? null,
+                ],
+            ];
+        }
+
+        foreach ($this->store->all('payments') as $row) {
+            $customer = $this->store->get('customers', (string) ($row['customer_id'] ?? ''));
+            $metaTerms = is_array($row['method_meta'] ?? null)
+                ? implode(' ', array_map('strval', array_filter($row['method_meta'], 'is_scalar')))
+                : '';
+
+            $entries[] = [
+                'type' => 'payment',
+                'id' => $row['id'],
+                'label' => $row['number'],
+                'terms' => [
+                    $customer['name'] ?? '',
+                    $customer['mobile'] ?? '',
+                    $row['method'] ?? '',
+                    $row['reference'] ?? '',
+                    $metaTerms,
+                    $row['status'] ?? '',
+                ],
+                'meta' => [
+                    'number' => $row['number'] ?? null,
+                    'customer_id' => $row['customer_id'] ?? null,
+                    'amount_paise' => $row['amount_paise'] ?? 0,
+                    'method' => $row['method'] ?? null,
+                    'status' => $row['status'] ?? null,
+                ],
+            ];
+        }
+
         $count = $this->index->replaceAll($entries);
 
         return [
@@ -171,6 +217,8 @@ final class SearchRebuilder
             'products' => count($this->store->all('products')),
             'quotations' => count($this->store->all('quotations')),
             'invoices' => count($this->store->all('invoices')),
+            'payment_batches' => count($this->store->all('payment_batches')),
+            'payments' => count($this->store->all('payments')),
         ];
     }
 }
