@@ -184,6 +184,8 @@ async function openCustomer(id) {
     document.querySelector('#add-contact').onclick = function(){ contactModal(id); };
     document.querySelector('#add-address').onclick = function(){ addressModal(id); };
     document.querySelector('#add-followup-customer').onclick = function(){ followupModal(id); };
+    w.querySelectorAll('[data-edit-contact]').forEach(function(btn){ btn.onclick = function(){ var record = data.contacts.find(function(x){ return x.id === btn.dataset.editContact; }); if (record) contactEditModal(record); }; });
+    w.querySelectorAll('[data-edit-address]').forEach(function(btn){ btn.onclick = function(){ var record = data.addresses.find(function(x){ return x.id === btn.dataset.editAddress; }); if (record) addressEditModal(record); }; });
   } catch (e) {
     w.innerHTML = errorCard(e.message);
   }
@@ -192,14 +194,14 @@ async function openCustomer(id) {
 function contactCards(rows) {
   if (!rows.length) return '<div class="empty-small">No contacts yet.</div>';
   return '<div class="mini-list">' + rows.map(function(r){
-    return '<div><b>' + esc(r.name) + '</b><span>' + esc(r.designation || r.mobile || r.email || '') + '</span></div>';
+    return '<div class="mini-row"><div><b>' + esc(r.name) + '</b><span>' + esc(r.designation || r.mobile || r.email || '') + '</span></div><button class="soft mini-edit" data-edit-contact="' + esc(r.id) + '">Edit</button></div>';
   }).join('') + '</div>';
 }
 
 function addressCards(rows) {
   if (!rows.length) return '<div class="empty-small">No addresses yet.</div>';
   return '<div class="address-grid">' + rows.map(function(a){
-    return '<div class="address-card"><div><span class="pill">' + esc(a.type) + '</span><b>' + esc(a.label) + '</b></div><p>' + esc(a.address) + (a.area ? ', ' + esc(a.area) : '') + (a.city ? ', ' + esc(a.city) : '') + (a.pin ? ' ' + esc(a.pin) : '') + '</p><small>' + (a.geocode_status === 'resolved' ? '● Map ready' : '○ Geocode pending') + '</small></div>';
+    return '<div class="address-card"><div><span class="pill">' + esc(a.type) + '</span><b>' + esc(a.label) + '</b></div><p>' + esc(a.address) + (a.area ? ', ' + esc(a.area) : '') + (a.city ? ', ' + esc(a.city) : '') + (a.pin ? ' ' + esc(a.pin) : '') + '</p><div class="address-foot"><small>' + (a.geocode_status === 'resolved' ? '● Map ready' : '○ Geocode pending') + '</small><button class="soft mini-edit" data-edit-address="' + esc(a.id) + '">Edit</button></div></div>';
   }).join('') + '</div>';
 }
 
@@ -220,7 +222,7 @@ async function leads(w) {
       cards = items.map(function(l){
         let options = '';
         stages.forEach(function(s){ options += '<option value="' + esc(s) + '"' + (s === l.stage ? ' selected' : '') + '>' + esc(s.replace('_',' ')) + '</option>'; });
-        return '<article class="lead-card"><b>' + esc(l.name) + '</b><span>' + esc(l.company || l.number) + '</span>' + (l.value ? '<strong>' + money(l.value) + '</strong>' : '') + '<select data-lead="' + esc(l.id) + '">' + options + '</select>' + ((!l.customer_id && l.stage !== 'lost') ? '<button class="soft convert-lead" data-convert="' + esc(l.id) + '">Convert to customer</button>' : '') + '</article>';
+        return '<article class="lead-card"><b>' + esc(l.name) + '</b><span>' + esc(l.company || l.number) + '</span>' + (l.value ? '<strong>' + money(l.value) + '</strong>' : '') + '<select data-lead="' + esc(l.id) + '">' + options + '</select><button class="soft" data-edit-lead="' + esc(l.id) + '">Edit details</button>' + ((!l.customer_id && l.stage !== 'lost') ? '<button class="soft convert-lead" data-convert="' + esc(l.id) + '">Convert to customer</button>' : '') + '</article>';
       }).join('');
     }
     board += '<section class="lane"><div class="lane-head"><b>' + esc(stage.replace('_',' ')) + '</b><span>' + items.length + '</span></div>' + cards + '</section>';
@@ -235,6 +237,9 @@ async function leads(w) {
         leads(w);
       } catch (e) { toast(e.message,true); }
     };
+  });
+  w.querySelectorAll('[data-edit-lead]').forEach(function(btn){
+    btn.onclick = function(){ var record = data.find(function(x){ return x.id === btn.dataset.editLead; }); if (record) leadEditModal(record); };
   });
   w.querySelectorAll('[data-convert]').forEach(function(btn){
     btn.onclick = async function(){
@@ -360,6 +365,28 @@ function contactModal(customerId) {
   modal('Add contact',
     '<label class="full">Name<input required name="name" autofocus></label><label>Designation<input name="designation"></label><label>Mobile<input name="mobile"></label><label>Email<input name="email" type="email"></label><label>WhatsApp<input name="whatsapp"></label>',
     function(p){ return api('customers/' + customerId + '/contacts',{method:'POST',body:p}); }
+  );
+}
+
+function contactEditModal(contact) {
+  modal('Edit contact',
+    '<label class="full">Name<input required name="name" value="' + esc(contact.name) + '"></label><label>Designation<input name="designation" value="' + esc(contact.designation || '') + '"></label><label>Mobile<input name="mobile" value="' + esc(contact.mobile || '') + '"></label><label>Email<input name="email" type="email" value="' + esc(contact.email || '') + '"></label><label>WhatsApp<input name="whatsapp" value="' + esc(contact.whatsapp || '') + '"></label>',
+    async function(p){ await api('contacts/' + contact.id,{method:'PATCH',body:p}); setTimeout(function(){ openCustomer(contact.customer_id); },0); }
+  );
+}
+
+function addressEditModal(address) {
+  modal('Edit address',
+    '<label>Type<select name="type">' + ['site','billing','shipping','registered','warehouse','office','other'].map(function(t){ return '<option value="' + t + '"' + (address.type === t ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select></label><label>Label<input name="label" value="' + esc(address.label || '') + '"></label>' +
+    '<label class="full">Address<textarea required name="address">' + esc(address.address || '') + '</textarea></label><label>Area<input name="area" value="' + esc(address.area || '') + '"></label><label>City<input name="city" value="' + esc(address.city || '') + '"></label><label>State<input name="state" value="' + esc(address.state || '') + '"></label><label>PIN<input name="pin" value="' + esc(address.pin || '') + '"></label>',
+    async function(p){ await api('addresses/' + address.id,{method:'PATCH',body:p}); setTimeout(function(){ openCustomer(address.customer_id); },0); }
+  );
+}
+
+function leadEditModal(lead) {
+  modal('Edit lead',
+    '<label class="full">Lead / Opportunity name<input required name="name" value="' + esc(lead.name) + '"></label><label>Company<input name="company" value="' + esc(lead.company || '') + '"></label><label>Mobile<input name="mobile" value="' + esc(lead.mobile || '') + '"></label><label>Email<input name="email" type="email" value="' + esc(lead.email || '') + '"></label><label>Source<input name="source" value="' + esc(lead.source || '') + '"></label><label>Estimated value<input name="value" type="number" min="0" value="' + esc(lead.value || 0) + '"></label><label class="full">Requirement<textarea name="requirement">' + esc(lead.requirement || '') + '</textarea></label>',
+    async function(p){ await api('leads/' + lead.id,{method:'PATCH',body:p}); }
   );
 }
 
