@@ -236,6 +236,49 @@ function customerBusiness(quotes, invoices) {
   }).join('') + '</div>';
 }
 
+function customerReceivables(receivables) {
+  if (!receivables) return '<div class="empty-small">No receivable summary.</div>';
+  const buckets = receivables.buckets || {};
+  const overdue = ['1_30','31_60','61_90','90_plus'].reduce(function(sum,key){
+    return sum + Number(buckets[key] ? buckets[key].amount_paise || 0 : 0);
+  }, 0);
+  return '<div class="finance-summary"><strong>' + moneyPaise(receivables.total_outstanding_paise || 0) + '</strong><span>Outstanding</span><small>' + moneyPaise(overdue) + ' overdue</small></div>';
+}
+
+function customerPayments(rows) {
+  if (!rows.length) return '<div class="empty-small">No payments received yet.</div>';
+  return '<div class="business-list">' + rows.slice(0,6).map(function(p){
+    return '<button class="business-button" data-payment="' + esc(p.id) + '"><span><b>' + esc(p.number) + '</b><small>' + esc(String(p.method || '').replace('_',' ').toUpperCase()) + (p.reference ? ' · ' + esc(p.reference) : '') + '</small></span><strong>' + moneyPaise(p.amount_paise) + '</strong></button>';
+  }).join('') + '</div>';
+}
+
+async function openCustomerStatement(customerId) {
+  state.view = 'customers';
+  const w = document.querySelector('#workspace');
+  w.innerHTML = '<div class="loading">Loading statement…</div>';
+  try {
+    const payload = await api('customers/' + customerId + '/statement');
+    const data = payload.data;
+    const rows = data.entries.length ? data.entries.map(function(entry){
+      return '<div class="statement-row"><span><b>' + esc(entry.reference) + '</b><small>' + esc(entry.description) + '<br>' + esc(entry.at ? new Date(entry.at).toLocaleDateString() : '') + '</small></span><span>' + (entry.debit_paise ? moneyPaise(entry.debit_paise) : '—') + '</span><span>' + (entry.credit_paise ? moneyPaise(entry.credit_paise) : '—') + '</span><strong>' + moneyPaise(entry.balance_paise) + '</strong></div>';
+    }).join('') : '<div class="empty-state"><b>No statement entries</b><span>Issued invoices and posted payments will appear here.</span></div>';
+
+    w.innerHTML =
+      '<button class="back" id="back-customer-statement">← Customer</button>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(data.customer.number) + '</p><h1>' + esc(data.customer.name) + '</h1><p>Customer statement as of ' + esc(data.as_of) + '</p></div><div class="record-actions"><button class="soft" id="print-statement">Print / PDF</button><button class="primary" id="statement-payment">+ Payment</button></div></section>' +
+      '<section class="metrics finance-metrics">' +
+        metric('Statement balance', moneyPaise(data.statement_balance_paise), 'Invoices less posted receipts') +
+        metric('Invoice outstanding', moneyPaise(data.invoice_outstanding_paise), 'Allocation-derived') +
+        metric('Unallocated credit', moneyPaise(data.unallocated_credit_paise), 'Available customer credit') +
+      '</section>' +
+      '<article class="table-card statement-card"><div class="statement-head"><span>Reference</span><span>Debit</span><span>Credit</span><span>Balance</span></div>' + rows + '</article>';
+
+    document.querySelector('#back-customer-statement').onclick = function(){ openCustomer(customerId); };
+    document.querySelector('#print-statement').onclick = function(){ window.print(); };
+    document.querySelector('#statement-payment').onclick = function(){ paymentModal(customerId); };
+  } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
 function nextActivity(rows) {
   const open = rows.filter(function(a){ return a.status === 'open'; }).sort(function(a,b){ return String(a.due_at || '').localeCompare(String(b.due_at || '')); })[0];
   if (!open) return '<div class="empty-small">Nothing scheduled.</div>';
