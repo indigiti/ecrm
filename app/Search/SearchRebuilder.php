@@ -204,6 +204,43 @@ final class SearchRebuilder
             ];
         }
 
+        foreach ($this->store->all('workshop_jobs') as $row) {
+            $customer = !empty($row['customer_id'])
+                ? $this->store->get('customers', (string) $row['customer_id'])
+                : null;
+            $product = !empty($row['product_id'])
+                ? $this->store->get('products', (string) $row['product_id'])
+                : null;
+            $unit = !empty($row['product_unit_id'])
+                ? $this->store->get('product_units', (string) $row['product_unit_id'])
+                : null;
+
+            $entries[] = [
+                'type' => 'workshop_job',
+                'id' => $row['id'],
+                'label' => $row['number'],
+                'terms' => [
+                    $customer['name'] ?? '',
+                    $customer['mobile'] ?? '',
+                    $product['name'] ?? '',
+                    $product['code'] ?? '',
+                    $unit['serial_no'] ?? '',
+                    $row['asset_serial'] ?? '',
+                    $row['reported_issue'] ?? '',
+                    $row['diagnosis'] ?? '',
+                    $row['status'] ?? '',
+                    $row['priority'] ?? '',
+                ],
+                'meta' => [
+                    'number' => $row['number'] ?? null,
+                    'customer_id' => $row['customer_id'] ?? null,
+                    'product_id' => $row['product_id'] ?? null,
+                    'status' => $row['status'] ?? null,
+                    'priority' => $row['priority'] ?? null,
+                ],
+            ];
+        }
+
         foreach ($this->store->all('payment_batches') as $row) {
             $entries[] = [
                 'type' => 'payment_batch',
@@ -264,6 +301,7 @@ final class SearchRebuilder
             'locations' => count($this->store->all('locations')),
             'product_units' => count($this->store->all('product_units')),
             'inventory_movements' => count($this->store->all('inventory_movements')),
+            'workshop_jobs' => count($this->store->all('workshop_jobs')),
             'payment_batches' => count($this->store->all('payment_batches')),
             'payments' => count($this->store->all('payments')),
         ];
