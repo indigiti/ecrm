@@ -4,12 +4,12 @@ import 'leaflet/dist/leaflet.css';
 import QRCode from 'qrcode';
 
 const app = document.querySelector('#app');
-const state = { view: 'dashboard', map: null, searchTimer: null, financeTab: 'receipts', inventoryTab: 'stock', reportType: 'sales', currentUser: null, csrfToken: null };
-const activeViews = ['dashboard','customers','leads','followups','map','products','inventory','workshop','quotations','invoices','payments','reports'];
+const state = { view: 'dashboard', map: null, searchTimer: null, financeTab: 'receipts', inventoryTab: 'stock', reportType: 'sales', settingsTab: 'company', currentUser: null, csrfToken: null, companySettings: null };
+const activeViews = ['dashboard','customers','leads','followups','map','products','inventory','workshop','quotations','invoices','payments','reports','documents','settings'];
 const nav = [
   ['dashboard','Dashboard'],['customers','Customers'],['leads','Leads'],['followups','Follow-ups'],['map','Map'],
   ['products','Products'],['inventory','Inventory'],['workshop','Workshop'],['quotations','Quotations'],
-  ['invoices','Invoices'],['payments','Payments'],['reports','Reports'],['settings','Settings']
+  ['invoices','Invoices'],['payments','Payments'],['reports','Reports'],['documents','Documents'],['settings','Settings']
 ];
 
 function esc(value) {
@@ -24,6 +24,16 @@ function money(value) {
 
 function moneyPaise(value) {
   return new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(value || 0) / 100);
+}
+
+function companyName() {
+  return (state.companySettings && state.companySettings.company_name) || 'eCRM';
+}
+
+function brandMark() {
+  const id = state.companySettings && state.companySettings.logo_document_id;
+  if (id) return '<img class="brand-logo-image" src="./api/documents/' + encodeURIComponent(id) + '/content" alt="">';
+  return '<span class="logo">e</span>';
 }
 
 async function api(path, options) {
@@ -69,13 +79,13 @@ function shell() {
   app.innerHTML =
     '<div class="shell">' +
       '<aside class="sidebar">' +
-        '<div class="brand"><span class="logo">e</span><div><b>eCRM</b><small>Business workspace</small></div></div>' +
+        '<div class="brand">' + brandMark() + '<div><b>' + esc(companyName()) + '</b><small>Business workspace</small></div></div>' +
         '<nav>' + navHtml + '</nav>' +
         '<div class="side-foot"><span class="status-dot"></span> DigiOps release ready</div>' +
       '</aside>' +
       '<section class="app">' +
         '<header class="topbar">' +
-          '<div class="mobile-brand"><span class="logo">e</span><b>eCRM</b></div>' +
+          '<div class="mobile-brand">' + brandMark() + '<b>' + esc(companyName()) + '</b></div>' +
           '<div class="search-wrap"><input id="global-search" autocomplete="off" placeholder="Search customers, contacts, GST, leads…"><kbd>⌘ K</kbd><div id="search-results" class="search-results hidden"></div></div>' +
           '<div class="top-actions"><button class="soft" id="scan-qr">Scan QR</button>' + (state.currentUser && state.currentUser.role !== 'read_only' ? '<button class="primary" id="new-customer">+ New</button>' : '') + '<span class="user-chip"><b>' + esc(state.currentUser ? state.currentUser.name : '') + '</b><small>' + esc(state.currentUser ? state.currentUser.role : '') + '</small></span><button class="soft" id="logout-user">Logout</button></div>' +
         '</header>' +
@@ -161,6 +171,8 @@ async function renderView() {
     if (state.view === 'invoices') return invoices(w);
     if (state.view === 'payments') return paymentsWorkspace(w);
     if (state.view === 'reports') return reportsWorkspace(w);
+    if (state.view === 'documents') return documentsWorkspace(w);
+    if (state.view === 'settings') return settingsWorkspace(w);
     return comingSoon(w);
   } catch (e) {
     w.innerHTML = errorCard(e.message);
@@ -1808,6 +1820,7 @@ async function boot() {
     }
     state.currentUser = status.user;
     state.csrfToken = status.csrf_token;
+    state.companySettings = (await api('settings')).data;
     shell();
   } catch(e) {
     app.innerHTML = '<main class="boot-screen"><b>eCRM could not start</b><span>' + esc(e.message) + '</span></main>';
@@ -1836,6 +1849,7 @@ function renderAuth(setupRequired) {
       const result = await api(setupRequired ? 'auth/setup' : 'auth/login',{method:'POST',body:payload});
       state.currentUser = result.data;
       state.csrfToken = result.csrf_token;
+      state.companySettings = (await api('settings')).data;
       state.view = 'dashboard';
       shell();
     } catch(err) {
