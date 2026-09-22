@@ -351,7 +351,7 @@ function customerEditModal(customer) {
     '<label>Category<input name="category" value="' + esc(customer.category || '') + '"></label><label>Status<select name="status"><option value="active"' + (customer.status === 'active' ? ' selected' : '') + '>Active</option><option value="inactive"' + (customer.status === 'inactive' ? ' selected' : '') + '>Inactive</option><option value="archived"' + (customer.status === 'archived' ? ' selected' : '') + '>Archived</option></select></label>',
     async function(p){
       await api('customers/' + customer.id,{method:'PATCH',body:p});
-      await openCustomer(customer.id);
+      setTimeout(function(){ openCustomer(customer.id); }, 0);
     }
   );
 }
