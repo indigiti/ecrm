@@ -6,6 +6,7 @@ namespace Ecrm\Domain\Finance;
 use Ecrm\Audit\AuditLedger;
 use Ecrm\Search\SearchIndex;
 use Ecrm\Storage\AtomicJsonStore;
+use Ecrm\Support\ExclusiveLock;
 use Ecrm\Support\Money;
 use Ecrm\Support\Sequence;
 use Ecrm\Support\UuidV7;
@@ -22,7 +23,8 @@ final class PaymentService
         private AtomicJsonStore $store,
         private Sequence $sequence,
         private SearchIndex $search,
-        private AuditLedger $audit
+        private AuditLedger $audit,
+        private ?string $lockRoot = null
     ) {}
 
     public function create(array $input): array
@@ -84,30 +86,32 @@ final class PaymentService
 
     public function void(string $id, string $reason): array
     {
-        $record = $this->get($id);
-        if ($record['status'] === 'void') return $record;
+        return $this->withFinanceLock(function () use ($id, $reason): array {
+            $record = $this->get($id);
+            if ($record['status'] === 'void') return $record;
 
-        $allocated = 0;
-        foreach ($this->store->all('payment_allocations') as $allocation) {
-            if (($allocation['payment_id'] ?? null) === $id) {
-                $allocated += (int) ($allocation['amount_paise'] ?? 0);
+            $allocated = 0;
+            foreach ($this->store->all('payment_allocations') as $allocation) {
+                if (($allocation['payment_id'] ?? null) === $id) {
+                    $allocated += (int) ($allocation['amount_paise'] ?? 0);
+                }
             }
-        }
-        if ($allocated !== 0) {
-            throw new InvalidArgumentException('Reverse payment allocations before voiding payment');
-        }
+            if ($allocated !== 0) {
+                throw new InvalidArgumentException('Reverse payment allocations before voiding payment');
+            }
 
-        $reason = trim($reason);
-        if ($reason === '') throw new InvalidArgumentException('Void reason is required');
+            $voidReason = trim($reason);
+            if ($voidReason === '') throw new InvalidArgumentException('Void reason is required');
 
-        $record['status'] = 'void';
-        $record['void_reason'] = $reason;
-        $record['voided_at'] = gmdate(DATE_ATOM);
-        $record['updated_at'] = gmdate(DATE_ATOM);
-        $this->store->put('payments', $id, $record);
-        $this->index($record);
-        $this->audit->append('payment.voided', 'payment', $id, ['reason' => $reason]);
-        return $record;
+            $record['status'] = 'void';
+            $record['void_reason'] = $voidReason;
+            $record['voided_at'] = gmdate(DATE_ATOM);
+            $record['updated_at'] = gmdate(DATE_ATOM);
+            $this->store->put('payments', $id, $record);
+            $this->index($record);
+            $this->audit->append('payment.voided', 'payment', $id, ['reason' => $voidReason]);
+            return $record;
+        });
     }
 
     public function get(string $id): array
@@ -120,6 +124,14 @@ final class PaymentService
     public function all(): array
     {
         return $this->store->all('payments');
+    }
+
+    private function withFinanceLock(callable $callback): mixed
+    {
+        if ($this->lockRoot === null || $this->lockRoot === '') {
+            return $callback();
+        }
+        return (new ExclusiveLock($this->lockRoot, 'finance-allocation'))->run($callback);
     }
 
     private function index(array $record): void
