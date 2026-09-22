@@ -125,7 +125,7 @@ async function dashboard(w) {
     '<section class="metrics">' +
       metric('Customers', d.customers, 'Active master records') +
       metric('Open leads', d.leads, 'Sales pipeline') +
-      metric('Follow-ups', d.open_followups, 'Needs attention') +
+      metric('Follow-ups', d.open_followups, (d.overdue_followups || 0) + ' overdue · ' + (d.due_today || 0) + ' due today') +
       metric('Mapped sites', d.mapped_addresses, 'Resolved locations') +
     '</section>' +
     '<section class="dash-grid">' +
@@ -171,7 +171,7 @@ async function openCustomer(id) {
     const data = payload.data, c = data.customer;
     w.innerHTML =
       '<button class="back" id="back-customers">← Customers</button>' +
-      '<section class="record-head"><div><p class="eyebrow">' + esc(c.number) + ' · ' + esc(c.status) + '</p><h1>' + esc(c.name) + '</h1><p>' + esc(c.category || 'Customer') + (c.gstin ? ' · GSTIN ' + esc(c.gstin) : '') + '</p></div><div class="record-actions"><button class="soft" id="add-contact">+ Contact</button><button class="soft" id="add-address">+ Address</button><button class="primary" id="add-followup-customer">+ Follow-up</button></div></section>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(c.number) + ' · ' + esc(c.status) + '</p><h1>' + esc(c.name) + '</h1><p>' + esc(c.category || 'Customer') + (c.gstin ? ' · GSTIN ' + esc(c.gstin) : '') + '</p></div><div class="record-actions"><button class="soft" id="edit-customer">Edit</button><button class="soft" id="add-contact">+ Contact</button><button class="soft" id="add-address">+ Address</button><button class="primary" id="add-followup-customer">+ Follow-up</button></div></section>' +
       '<section class="customer-grid">' +
         '<article class="panel"><p class="eyebrow">CUSTOMER</p><dl><dt>Contact</dt><dd>' + esc(c.contact_person || '—') + '</dd><dt>Mobile</dt><dd>' + esc(c.mobile || '—') + '</dd><dt>Email</dt><dd>' + esc(c.email || '—') + '</dd><dt>GSTIN</dt><dd>' + esc(c.gstin || '—') + '</dd></dl></article>' +
         '<article class="panel"><p class="eyebrow">UP NEXT</p>' + nextActivity(data.activities) + '</article>' +
@@ -180,6 +180,7 @@ async function openCustomer(id) {
         '<article class="panel"><p class="eyebrow">ACTIVITY</p>' + timeline(data.activities) + '</article>' +
       '</section>';
     document.querySelector('#back-customers').onclick = function(){ customers(w); };
+    document.querySelector('#edit-customer').onclick = function(){ customerEditModal(c); };
     document.querySelector('#add-contact').onclick = function(){ contactModal(id); };
     document.querySelector('#add-address').onclick = function(){ addressModal(id); };
     document.querySelector('#add-followup-customer').onclick = function(){ followupModal(id); };
@@ -219,7 +220,7 @@ async function leads(w) {
       cards = items.map(function(l){
         let options = '';
         stages.forEach(function(s){ options += '<option value="' + esc(s) + '"' + (s === l.stage ? ' selected' : '') + '>' + esc(s.replace('_',' ')) + '</option>'; });
-        return '<article class="lead-card"><b>' + esc(l.name) + '</b><span>' + esc(l.company || l.number) + '</span>' + (l.value ? '<strong>' + money(l.value) + '</strong>' : '') + '<select data-lead="' + esc(l.id) + '">' + options + '</select></article>';
+        return '<article class="lead-card"><b>' + esc(l.name) + '</b><span>' + esc(l.company || l.number) + '</span>' + (l.value ? '<strong>' + money(l.value) + '</strong>' : '') + '<select data-lead="' + esc(l.id) + '">' + options + '</select>' + ((!l.customer_id && l.stage !== 'lost') ? '<button class="soft convert-lead" data-convert="' + esc(l.id) + '">Convert to customer</button>' : '') + '</article>';
       }).join('');
     }
     board += '<section class="lane"><div class="lane-head"><b>' + esc(stage.replace('_',' ')) + '</b><span>' + items.length + '</span></div>' + cards + '</section>';
@@ -235,18 +236,42 @@ async function leads(w) {
       } catch (e) { toast(e.message,true); }
     };
   });
+  w.querySelectorAll('[data-convert]').forEach(function(btn){
+    btn.onclick = async function(){
+      btn.disabled = true;
+      try {
+        const payload = await api('leads/' + btn.dataset.convert + '/convert',{method:'POST',body:{}});
+        toast('Lead converted to ' + payload.data.customer.number);
+        state.view = 'customers';
+        shell();
+        setTimeout(function(){ openCustomer(payload.data.customer.id); }, 0);
+      } catch (e) { btn.disabled = false; toast(e.message,true); }
+    };
+  });
 }
 
 async function followups(w) {
-  const payload = await api('activities');
-  const open = payload.data.filter(function(a){ return a.status === 'open'; });
-  let content = '<div class="empty-state"><b>No open follow-ups</b><span>New tasks and follow-ups will appear here.</span></div>';
-  if (open.length) {
-    content = '<div class="task-list">' + open.map(function(a){
-      return '<div class="task"><div><span class="pill">' + esc(a.type.replace('_',' ')) + '</span><b>' + esc(a.subject) + '</b><small>' + (a.due_at ? esc(new Date(a.due_at).toLocaleString()) : 'No due date') + '</small></div><button class="soft" data-complete="' + esc(a.id) + '">Complete</button></div>';
-    }).join('') + '</div>';
+  const payload = await api('activities/attention');
+  const buckets = payload.data;
+  const total = buckets.overdue.length + buckets.today.length + buckets.upcoming.length + buckets.unscheduled.length;
+
+  function bucket(title, rows, tone) {
+    if (!rows.length) return '';
+    return '<section class="attention-section"><div class="attention-title"><b>' + esc(title) + '</b><span>' + rows.length + '</span></div><div class="task-list">' + rows.map(function(a){
+      return '<div class="task ' + tone + '"><div><span class="pill">' + esc(a.type.replace('_',' ')) + '</span><b>' + esc(a.subject) + '</b><small>' + (a.due_at ? esc(new Date(a.due_at).toLocaleString()) : 'No due date') + '</small></div><button class="soft" data-complete="' + esc(a.id) + '">Complete</button></div>';
+    }).join('') + '</div></section>';
   }
-  w.innerHTML = '<section class="page-head"><div><p class="eyebrow">MY WORK</p><h1>Follow-ups</h1><p>' + open.length + ' open item' + (open.length === 1 ? '' : 's') + ' requiring attention.</p></div><button class="primary" id="add-followup">+ Follow-up</button></section><article class="panel">' + content + '</article>';
+
+  let content = '<div class="empty-state"><b>No open follow-ups</b><span>New tasks and follow-ups will appear here.</span></div>';
+  if (total) {
+    content =
+      bucket('Overdue', buckets.overdue, 'is-overdue') +
+      bucket('Due today', buckets.today, 'is-today') +
+      bucket('Upcoming', buckets.upcoming, '') +
+      bucket('Unscheduled', buckets.unscheduled, '');
+  }
+
+  w.innerHTML = '<section class="page-head"><div><p class="eyebrow">MY WORK</p><h1>Follow-ups</h1><p>' + total + ' open item' + (total === 1 ? '' : 's') + '. Overdue work is surfaced first.</p></div><button class="primary" id="add-followup">+ Follow-up</button></section><article class="panel">' + content + '</article>';
   document.querySelector('#add-followup').onclick = function(){ followupModal(); };
   w.querySelectorAll('[data-complete]').forEach(function(btn){
     btn.onclick = async function(){
@@ -314,6 +339,20 @@ function customerModal() {
     '<label>Email<input name="email" type="email"></label><label>WhatsApp<input name="whatsapp"></label>' +
     '<label>GSTIN<input name="gstin"></label><label>Category<input name="category"></label>',
     function(p){ return api('customers',{method:'POST',body:p}); }
+  );
+}
+
+function customerEditModal(customer) {
+  modal('Edit customer',
+    '<label class="full">Customer / Business name<input required name="name" value="' + esc(customer.name) + '"></label>' +
+    '<label>Contact person<input name="contact_person" value="' + esc(customer.contact_person || '') + '"></label><label>Mobile<input name="mobile" value="' + esc(customer.mobile || '') + '"></label>' +
+    '<label>Email<input name="email" type="email" value="' + esc(customer.email || '') + '"></label><label>WhatsApp<input name="whatsapp" value="' + esc(customer.whatsapp || '') + '"></label>' +
+    '<label>GSTIN<input name="gstin" value="' + esc(customer.gstin || '') + '"></label><label>PAN<input name="pan" value="' + esc(customer.pan || '') + '"></label>' +
+    '<label>Category<input name="category" value="' + esc(customer.category || '') + '"></label><label>Status<select name="status"><option value="active"' + (customer.status === 'active' ? ' selected' : '') + '>Active</option><option value="inactive"' + (customer.status === 'inactive' ? ' selected' : '') + '>Inactive</option><option value="archived"' + (customer.status === 'archived' ? ' selected' : '') + '>Archived</option></select></label>',
+    async function(p){
+      await api('customers/' + customer.id,{method:'PATCH',body:p});
+      await openCustomer(customer.id);
+    }
   );
 }
 
