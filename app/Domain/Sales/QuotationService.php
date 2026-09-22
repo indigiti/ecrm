@@ -35,7 +35,8 @@ final class QuotationService
         );
 
         $year = gmdate('Y');
-        $prefix = (string) (($this->settings?->get()['quote_prefix'] ?? null) ?: 'QUO');
+        $settings = $this->settings?->get() ?? [];
+        $prefix = (string) (($settings['quote_prefix'] ?? null) ?: 'QUO');
         $now = gmdate(DATE_ATOM);
         $record = [
             'id' => UuidV7::generate(),
