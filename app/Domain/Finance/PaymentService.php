@@ -1,0 +1,145 @@
+<?php
+declare(strict_types=1);
+
+namespace Ecrm\Domain\Finance;
+
+use Ecrm\Audit\AuditLedger;
+use Ecrm\Search\SearchIndex;
+use Ecrm\Storage\AtomicJsonStore;
+use Ecrm\Support\Money;
+use Ecrm\Support\Sequence;
+use Ecrm\Support\UuidV7;
+use InvalidArgumentException;
+
+final class PaymentService
+{
+    public const METHODS = [
+        'cash','upi','neft','rtgs','imps','cheque','card',
+        'bank_transfer','credit_note','other'
+    ];
+
+    public function __construct(
+        private AtomicJsonStore $store,
+        private Sequence $sequence,
+        private SearchIndex $search,
+        private AuditLedger $audit
+    ) {}
+
+    public function create(array $input): array
+    {
+        $customerId = trim((string) ($input['customer_id'] ?? ''));
+        if ($customerId === '' || !$this->store->get('customers', $customerId)) {
+            throw new InvalidArgumentException('Customer is required');
+        }
+
+        $amountPaise = array_key_exists('amount_paise', $input)
+            ? (int) $input['amount_paise']
+            : Money::toPaise($input['amount'] ?? 0);
+        if ($amountPaise <= 0) throw new InvalidArgumentException('Payment amount must be greater than zero');
+
+        $method = strtolower(trim((string) ($input['method'] ?? '')));
+        if (!in_array($method, self::METHODS, true)) {
+            throw new InvalidArgumentException('Invalid payment method');
+        }
+
+        $batchId = trim((string) ($input['batch_id'] ?? ''));
+        if ($batchId !== '') {
+            $batch = $this->store->get('payment_batches', $batchId);
+            if (!$batch) throw new InvalidArgumentException('Payment batch not found');
+            if (($batch['status'] ?? '') !== 'open') throw new InvalidArgumentException('Payment batch is closed');
+            if (!empty($batch['customer_id']) && $batch['customer_id'] !== $customerId) {
+                throw new InvalidArgumentException('Payment customer does not match batch customer');
+            }
+        }
+
+        $year = gmdate('Y');
+        $now = gmdate(DATE_ATOM);
+        $record = [
+            'id' => UuidV7::generate(),
+            'number' => $this->sequence->next('payments-' . $year, 'PAY-' . $year . '-'),
+            'customer_id' => $customerId,
+            'batch_id' => $batchId !== '' ? $batchId : null,
+            'amount_paise' => $amountPaise,
+            'method' => $method,
+            'reference' => trim((string) ($input['reference'] ?? '')),
+            'method_meta' => is_array($input['method_meta'] ?? null) ? $input['method_meta'] : [],
+            'received_at' => $input['received_at'] ?? $now,
+            'notes' => trim((string) ($input['notes'] ?? '')),
+            'status' => 'posted',
+            'void_reason' => null,
+            'voided_at' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ];
+
+        $this->store->put('payments', $record['id'], $record);
+        $this->index($record);
+        $this->audit->append('payment.created', 'payment', $record['id'], [
+            'number' => $record['number'],
+            'amount_paise' => $amountPaise,
+            'method' => $method,
+        ]);
+        return $record;
+    }
+
+    public function void(string $id, string $reason): array
+    {
+        $record = $this->get($id);
+        if ($record['status'] === 'void') return $record;
+
+        $allocated = 0;
+        foreach ($this->store->all('payment_allocations') as $allocation) {
+            if (($allocation['payment_id'] ?? null) === $id) {
+                $allocated += (int) ($allocation['amount_paise'] ?? 0);
+            }
+        }
+        if ($allocated !== 0) {
+            throw new InvalidArgumentException('Reverse payment allocations before voiding payment');
+        }
+
+        $reason = trim($reason);
+        if ($reason === '') throw new InvalidArgumentException('Void reason is required');
+
+        $record['status'] = 'void';
+        $record['void_reason'] = $reason;
+        $record['voided_at'] = gmdate(DATE_ATOM);
+        $record['updated_at'] = gmdate(DATE_ATOM);
+        $this->store->put('payments', $id, $record);
+        $this->index($record);
+        $this->audit->append('payment.voided', 'payment', $id, ['reason' => $reason]);
+        return $record;
+    }
+
+    public function get(string $id): array
+    {
+        $record = $this->store->get('payments', $id);
+        if (!$record) throw new InvalidArgumentException('Payment not found');
+        return $record;
+    }
+
+    public function all(): array
+    {
+        return $this->store->all('payments');
+    }
+
+    private function index(array $record): void
+    {
+        $customer = $this->store->get('customers', (string) $record['customer_id']);
+        $meta = implode(' ', array_map('strval', array_filter($record['method_meta'], 'is_scalar')));
+
+        $this->search->upsert('payment', $record['id'], $record['number'], [
+            $customer['name'] ?? '',
+            $customer['mobile'] ?? '',
+            $record['method'],
+            $record['reference'],
+            $meta,
+            $record['status'],
+        ], [
+            'number' => $record['number'],
+            'customer_id' => $record['customer_id'],
+            'amount_paise' => $record['amount_paise'],
+            'method' => $record['method'],
+            'status' => $record['status'],
+        ]);
+    }
+}
