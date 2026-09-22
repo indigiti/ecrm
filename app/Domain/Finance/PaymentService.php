@@ -64,7 +64,8 @@ final class PaymentService
         }
 
         $year = gmdate('Y');
-        $prefix = (string) (($this->settings?->get()['payment_prefix'] ?? null) ?: 'PAY');
+        $settings = $this->settings?->get() ?? [];
+        $prefix = (string) (($settings['payment_prefix'] ?? null) ?: 'PAY');
         $now = gmdate(DATE_ATOM);
         $record = [
             'id' => UuidV7::generate(),
