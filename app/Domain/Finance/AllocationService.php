@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Ecrm\Domain\Finance;
 
 use Ecrm\Audit\AuditLedger;
+use Ecrm\Search\SearchIndex;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\ExclusiveLock;
 use Ecrm\Support\Money;
@@ -15,7 +16,8 @@ final class AllocationService
     public function __construct(
         private AtomicJsonStore $store,
         private AuditLedger $audit,
-        private string $lockRoot
+        private string $lockRoot,
+        private ?SearchIndex $search = null
     ) {}
 
     public function allocate(string $paymentId, string $invoiceId, mixed $amount): array
@@ -162,11 +164,29 @@ final class AllocationService
             $invoice['status'] = $status;
             $invoice['updated_at'] = gmdate(DATE_ATOM);
             $this->store->put('invoices', $invoiceId, $invoice);
+            $this->indexInvoice($invoice);
             $this->audit->append('invoice.receivable_status_changed', 'invoice', $invoiceId, [
                 'status' => $status,
                 'allocated_paise' => $allocated,
             ]);
         }
+    }
+
+    private function indexInvoice(array $invoice): void
+    {
+        if ($this->search === null) return;
+
+        $this->search->upsert('invoice', $invoice['id'], $invoice['number'], [
+            $invoice['customer_snapshot']['name'] ?? '',
+            $invoice['customer_snapshot']['mobile'] ?? '',
+            $invoice['customer_snapshot']['gstin'] ?? '',
+            $invoice['status'] ?? '',
+        ], [
+            'number' => $invoice['number'] ?? null,
+            'status' => $invoice['status'] ?? null,
+            'customer_id' => $invoice['customer_id'] ?? null,
+            'grand_total_paise' => $invoice['totals']['grand_total_paise'] ?? 0,
+        ]);
     }
 
     private function payment(string $id): array
