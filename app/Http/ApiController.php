@@ -133,6 +133,10 @@ final class ApiController
             }
 
             if (($segments[0] ?? '') === 'leads' && isset($segments[1])) {
+                if (count($segments) === 2 && in_array($method, ['PUT', 'PATCH'], true)) {
+                    $this->json(['data' => $this->leads->update($segments[1], $input)]);
+                    return;
+                }
                 if (($segments[2] ?? '') === 'stage' && in_array($method, ['PUT', 'PATCH'], true)) {
                     $this->json(['data' => $this->leads->changeStage($segments[1], (string) ($input['stage'] ?? ''))]);
                     return;
@@ -141,6 +145,16 @@ final class ApiController
                     $this->json(['data' => $this->leadConversion->convert($segments[1], $input)], 201);
                     return;
                 }
+            }
+
+            if (($segments[0] ?? '') === 'contacts' && isset($segments[1]) && count($segments) === 2 && in_array($method, ['PUT', 'PATCH'], true)) {
+                $this->json(['data' => $this->contacts->update($segments[1], $input)]);
+                return;
+            }
+
+            if (($segments[0] ?? '') === 'addresses' && isset($segments[1]) && count($segments) === 2 && in_array($method, ['PUT', 'PATCH'], true)) {
+                $this->json(['data' => $this->addresses->update($segments[1], $input)]);
+                return;
             }
 
             if ($segments === ['activities']) {
