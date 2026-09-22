@@ -6,6 +6,7 @@ namespace Ecrm\Domain\Inventory;
 use Ecrm\Audit\AuditLedger;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\ExclusiveLock;
+use Ecrm\Support\Sequence;
 use Ecrm\Support\UuidV7;
 use InvalidArgumentException;
 
@@ -19,7 +20,8 @@ final class MovementService
     public function __construct(
         private AtomicJsonStore $store,
         private AuditLedger $audit,
-        private string $lockRoot
+        private string $lockRoot,
+        private Sequence $sequence
     ) {}
 
     public function record(array $input): array
@@ -66,6 +68,7 @@ final class MovementService
 
             $record = [
                 'id' => UuidV7::generate(),
+                'ledger_seq' => $this->nextLedgerSequence(),
                 'product_id' => $original['product_id'],
                 'product_unit_id' => $original['product_unit_id'] ?? null,
                 'from_location_id' => $from,
@@ -92,7 +95,7 @@ final class MovementService
 
     public function history(?string $productId = null, ?string $locationId = null): array
     {
-        return array_values(array_filter(
+        $rows = array_values(array_filter(
             $this->store->all('inventory_movements'),
             static function(array $row) use ($productId, $locationId): bool {
                 if ($productId !== null && ($row['product_id'] ?? null) !== $productId) return false;
@@ -102,6 +105,12 @@ final class MovementService
                 return true;
             }
         ));
+
+        usort($rows, static fn(array $a, array $b): int =>
+            ((int) ($b['ledger_seq'] ?? 0) <=> (int) ($a['ledger_seq'] ?? 0))
+            ?: strcmp((string) ($b['created_at'] ?? ''), (string) ($a['created_at'] ?? ''))
+        );
+        return $rows;
     }
 
     private function recordUnlocked(array $input): array
@@ -169,6 +178,7 @@ final class MovementService
 
         $record = [
             'id' => UuidV7::generate(),
+            'ledger_seq' => $this->nextLedgerSequence(),
             'product_id' => $productId,
             'product_unit_id' => $unitId !== '' ? $unitId : null,
             'from_location_id' => $from,
@@ -264,6 +274,11 @@ final class MovementService
     private function fromMilli(int $quantityMilli): float
     {
         return round($quantityMilli / 1000, 3);
+    }
+
+    private function nextLedgerSequence(): int
+    {
+        return (int) $this->sequence->next('inventory-movements', '', 12);
     }
 
     private function withLock(callable $callback): mixed
