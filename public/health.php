@@ -25,6 +25,6 @@ http_response_code($status === 'ok' ? 200 : 503);
 echo json_encode([
     'status' => $status,
     'app' => 'ecrm',
-    'version' => '0.3.0',
+    'version' => '0.4.0',
     'checks' => $checks,
 ], JSON_UNESCAPED_SLASHES);
