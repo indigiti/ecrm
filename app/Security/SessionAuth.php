@@ -25,7 +25,7 @@ final class SessionAuth
         $secure = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
             || strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
 
-        $scriptName = str_replace('\\\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? '/'));
+        $scriptName = (string) ($_SERVER['SCRIPT_NAME'] ?? '/');
         $cookiePath = rtrim(dirname($scriptName), '/');
         if ($cookiePath === '' || $cookiePath === '.') $cookiePath = '/';
         elseif ($cookiePath !== '/') $cookiePath .= '/';
