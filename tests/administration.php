@@ -7,6 +7,7 @@ define('ECRM_PRIVATE_ROOT', $root);
 require dirname(__DIR__) . '/app/bootstrap.php';
 
 use Ecrm\Audit\AuditLedger;
+use Ecrm\Domain\Admin\BackupService;
 use Ecrm\Domain\Admin\SettingsService;
 use Ecrm\Domain\Admin\UserService;
 use Ecrm\Domain\Documents\DocumentService;
@@ -52,6 +53,7 @@ try {
     $users = new UserService($userStore, $audit);
     $settings = new SettingsService($configStore, $audit);
     $documents = new DocumentService($data, $search, $audit, $root . '/uploads');
+    $backups = new BackupService($root, $audit);
 
     expectAdmin($users->count() === 0, 'Fresh installation should have no users');
 
@@ -162,6 +164,30 @@ try {
 
     $archived = $documents->archive($document['id'], 'Superseded in test');
     expectAdmin($archived['status'] === 'archived', 'Document archive failed');
+
+    $snapshot = $backups->create();
+    expectAdmin($snapshot['file_count'] > 0, 'Backup snapshot contains no files');
+    expectAdmin($snapshot['total_bytes'] > 0, 'Backup snapshot contains no bytes');
+
+    $verifiedBackup = $backups->verify($snapshot['id']);
+    expectAdmin($verifiedBackup['ok'] === true, 'Fresh backup verification failed: ' . implode('; ', $verifiedBackup['errors']));
+    expectAdmin($verifiedBackup['checked_files'] === $snapshot['file_count'], 'Backup verified file count incorrect');
+
+    $manifestPath = $root . '/backups/' . $snapshot['id'] . '/MANIFEST.json';
+    $manifest = json_decode((string) file_get_contents($manifestPath), true);
+    $tamperRelative = null;
+    foreach (array_keys($manifest['files'] ?? []) as $relative) {
+        if (!str_ends_with($relative, '.lock')) {
+            $tamperRelative = $relative;
+            break;
+        }
+    }
+    expectAdmin(is_string($tamperRelative) && $tamperRelative !== '', 'No backup file available for tamper test');
+    file_put_contents($root . '/backups/' . $snapshot['id'] . '/' . $tamperRelative, "\ntampered", FILE_APPEND);
+
+    $failedBackup = $backups->verify($snapshot['id']);
+    expectAdmin($failedBackup['ok'] === false, 'Tampered backup unexpectedly passed verification');
+    expectAdmin(count($failedBackup['errors']) >= 1, 'Tampered backup did not report a verification error');
 
     $auth = new SessionAuth();
     $auth->start();
