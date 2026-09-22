@@ -3,8 +3,8 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 const app = document.querySelector('#app');
-const state = { view: 'dashboard', map: null, searchTimer: null };
-const activeViews = ['dashboard','customers','leads','followups','map','products','quotations','invoices'];
+const state = { view: 'dashboard', map: null, searchTimer: null, financeTab: 'receipts' };
+const activeViews = ['dashboard','customers','leads','followups','map','products','quotations','invoices','payments'];
 const nav = [
   ['dashboard','Dashboard'],['customers','Customers'],['leads','Leads'],['followups','Follow-ups'],['map','Map'],
   ['products','Products'],['inventory','Inventory'],['workshop','Workshop'],['quotations','Quotations'],
@@ -102,6 +102,7 @@ async function searchGlobal(query) {
         if (el.dataset.type === 'product') { state.view = 'products'; shell(); }
         if (el.dataset.type === 'quotation') { state.view = 'quotations'; shell(); }
         if (el.dataset.type === 'invoice') { state.view = 'invoices'; shell(); }
+        if (el.dataset.type === 'payment' || el.dataset.type === 'payment_batch') { state.view = 'payments'; shell(); }
       });
     });
   } catch (e) {
@@ -122,6 +123,7 @@ async function renderView() {
     if (state.view === 'products') return products(w);
     if (state.view === 'quotations') return quotations(w);
     if (state.view === 'invoices') return invoices(w);
+    if (state.view === 'payments') return paymentsWorkspace(w);
     return comingSoon(w);
   } catch (e) {
     w.innerHTML = errorCard(e.message);
@@ -139,18 +141,20 @@ async function dashboard(w) {
       metric('Mapped sites', d.mapped_addresses, 'Resolved locations') +
       metric('Quotes waiting', d.quotes_awaiting || 0, 'Awaiting decision') +
       metric('Issued invoices', d.issued_invoices || 0, 'Active receivables') +
+      metric('Collected', moneyPaise(d.collected_paise || 0), 'Posted receipts') +
+      metric('Outstanding', moneyPaise(d.outstanding_paise || 0), moneyPaise(d.overdue_paise || 0) + ' overdue') +
     '</section>' +
     '<section class="dash-grid">' +
       '<article class="panel attention"><div><p class="eyebrow">NEEDS ATTENTION</p><h2>' + (d.open_followups ? d.open_followups + ' open follow-up' + (d.open_followups === 1 ? '' : 's') : 'You’re all caught up') + '</h2><p>Tasks and follow-ups stay visible until completed.</p></div><button class="chip" id="open-followups">Open queue</button></article>' +
-      '<article class="panel"><p class="eyebrow">QUICK ACTIONS</p><div class="quick"><button id="quick-customer">+ Customer</button><button id="quick-lead">+ Lead</button><button id="quick-quote">+ Quotation</button><button id="quick-invoice">+ Invoice</button></div></article>' +
+      '<article class="panel"><p class="eyebrow">QUICK ACTIONS</p><div class="quick"><button id="quick-customer">+ Customer</button><button id="quick-quote">+ Quotation</button><button id="quick-invoice">+ Invoice</button><button id="quick-payment">+ Payment</button></div></article>' +
       '<article class="panel wide"><div class="row"><div><p class="eyebrow">RECENT ACTIVITY</p><h2>Business timeline</h2></div></div>' + timeline(d.recent_activity) + '</article>' +
     '</section>';
 
   document.querySelector('#dash-customer').onclick = customerModal;
   document.querySelector('#quick-customer').onclick = customerModal;
-  document.querySelector('#quick-lead').onclick = leadModal;
   document.querySelector('#quick-quote').onclick = function(){ salesDocumentModal('quotation'); };
   document.querySelector('#quick-invoice').onclick = function(){ salesDocumentModal('invoice'); };
+  document.querySelector('#quick-payment').onclick = function(){ paymentModal(); };
   document.querySelector('#open-followups').onclick = function(){ state.view = 'followups'; shell(); };
 }
 
@@ -183,7 +187,7 @@ async function openCustomer(id) {
     const data = payload.data, c = data.customer;
     w.innerHTML =
       '<button class="back" id="back-customers">← Customers</button>' +
-      '<section class="record-head"><div><p class="eyebrow">' + esc(c.number) + ' · ' + esc(c.status) + '</p><h1>' + esc(c.name) + '</h1><p>' + esc(c.category || 'Customer') + (c.gstin ? ' · GSTIN ' + esc(c.gstin) : '') + '</p></div><div class="record-actions"><button class="soft" id="edit-customer">Edit</button><button class="soft" id="add-contact">+ Contact</button><button class="soft" id="add-address">+ Address</button><button class="primary" id="add-followup-customer">+ Follow-up</button></div></section>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(c.number) + ' · ' + esc(c.status) + '</p><h1>' + esc(c.name) + '</h1><p>' + esc(c.category || 'Customer') + (c.gstin ? ' · GSTIN ' + esc(c.gstin) : '') + '</p></div><div class="record-actions"><button class="soft" id="customer-statement">Statement</button><button class="soft" id="edit-customer">Edit</button><button class="soft" id="add-contact">+ Contact</button><button class="soft" id="add-address">+ Address</button><button class="primary" id="add-followup-customer">+ Follow-up</button></div></section>' +
       '<section class="customer-grid">' +
         '<article class="panel"><p class="eyebrow">CUSTOMER</p><dl><dt>Contact</dt><dd>' + esc(c.contact_person || '—') + '</dd><dt>Mobile</dt><dd>' + esc(c.mobile || '—') + '</dd><dt>Email</dt><dd>' + esc(c.email || '—') + '</dd><dt>GSTIN</dt><dd>' + esc(c.gstin || '—') + '</dd></dl></article>' +
         '<article class="panel"><p class="eyebrow">UP NEXT</p>' + nextActivity(data.activities) + '</article>' +
@@ -191,8 +195,11 @@ async function openCustomer(id) {
         '<article class="panel span2"><p class="eyebrow">ADDRESSES</p>' + addressCards(data.addresses) + '</article>' +
         '<article class="panel"><p class="eyebrow">ACTIVITY</p>' + timeline(data.activities) + '</article>' +
         '<article class="panel span2"><p class="eyebrow">RECENT BUSINESS</p>' + customerBusiness(data.quotations || [], data.invoices || []) + '</article>' +
+        '<article class="panel"><p class="eyebrow">RECEIVABLES</p>' + customerReceivables(data.receivables) + '</article>' +
+        '<article class="panel span2"><p class="eyebrow">PAYMENTS</p>' + customerPayments(data.payments || []) + '</article>' +
       '</section>';
     document.querySelector('#back-customers').onclick = function(){ customers(w); };
+    document.querySelector('#customer-statement').onclick = function(){ openCustomerStatement(id); };
     document.querySelector('#edit-customer').onclick = function(){ customerEditModal(c); };
     document.querySelector('#add-contact').onclick = function(){ contactModal(id); };
     document.querySelector('#add-address').onclick = function(){ addressModal(id); };
