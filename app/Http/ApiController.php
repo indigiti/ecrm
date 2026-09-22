@@ -15,6 +15,10 @@ use Ecrm\Domain\Finance\AllocationService;
 use Ecrm\Domain\Finance\PaymentBatchService;
 use Ecrm\Domain\Finance\PaymentService;
 use Ecrm\Domain\Finance\ReceivablesService;
+use Ecrm\Domain\Inventory\LocationService;
+use Ecrm\Domain\Inventory\MovementService;
+use Ecrm\Domain\Inventory\ProductUnitService;
+use Ecrm\Domain\Inventory\StockService;
 use Ecrm\Domain\Products\ProductService;
 use Ecrm\Domain\Sales\InvoiceService;
 use Ecrm\Domain\Sales\QuotationService;
@@ -42,6 +46,10 @@ final class ApiController
     private PaymentService $payments;
     private AllocationService $allocations;
     private ReceivablesService $receivables;
+    private LocationService $locations;
+    private MovementService $movements;
+    private ProductUnitService $productUnits;
+    private StockService $stock;
     private SearchIndex $search;
 
     public function __construct()
@@ -67,6 +75,10 @@ final class ApiController
         $this->payments = new PaymentService($this->store, $sequence, $this->search, $audit, $locks);
         $this->allocations = new AllocationService($this->store, $audit, $locks, $this->search);
         $this->receivables = new ReceivablesService($this->store, $this->allocations);
+        $this->locations = new LocationService($this->store, $sequence, $this->search, $audit);
+        $this->movements = new MovementService($this->store, $audit, $locks);
+        $this->productUnits = new ProductUnitService($this->store, $this->search, $audit, $locks);
+        $this->stock = new StockService($this->store);
     }
 
     public function handle(): void
@@ -236,15 +248,133 @@ final class ApiController
                 }
             }
 
-            if (($segments[0] ?? '') === 'products' && isset($segments[1]) && count($segments) === 2) {
+            if (($segments[0] ?? '') === 'products' && isset($segments[1])) {
+                $productId = $segments[1];
+                if (count($segments) === 2 && $method === 'GET') {
+                    $this->json(['data' => $this->products->get($productId)]);
+                    return;
+                }
+                if (count($segments) === 2 && in_array($method, ['PUT','PATCH'], true)) {
+                    $this->json(['data' => $this->products->update($productId, $input)]);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'overview' && $method === 'GET') {
+                    $this->json(['data' => [
+                        'product' => $this->products->get($productId),
+                        'stock' => $this->stock->product($productId),
+                        'units' => $this->productUnits->forProduct($productId),
+                        'movements' => $this->movements->history($productId),
+                    ]]);
+                    return;
+                }
+            }
+
+            if ($segments === ['locations']) {
                 if ($method === 'GET') {
-                    $this->json(['data' => $this->products->get($segments[1])]);
+                    $this->json(['data' => $this->locations->all(), 'types' => LocationService::TYPES]);
                     return;
                 }
-                if (in_array($method, ['PUT','PATCH'], true)) {
-                    $this->json(['data' => $this->products->update($segments[1], $input)]);
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->locations->create($input)], 201);
                     return;
                 }
+            }
+
+            if ($segments === ['locations', 'tree'] && $method === 'GET') {
+                $this->json(['data' => $this->locations->tree()]);
+                return;
+            }
+
+            if (($segments[0] ?? '') === 'locations' && isset($segments[1])) {
+                $locationId = $segments[1];
+                if (count($segments) === 2 && $method === 'GET') {
+                    $this->json(['data' => $this->locations->get($locationId)]);
+                    return;
+                }
+                if (count($segments) === 2 && in_array($method, ['PUT','PATCH'], true)) {
+                    $this->json(['data' => $this->locations->update($locationId, $input)]);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'stock' && $method === 'GET') {
+                    $this->json(['data' => $this->stock->location($locationId)]);
+                    return;
+                }
+            }
+
+            if ($segments === ['product-units']) {
+                if ($method === 'GET') {
+                    $productId = isset($_GET['product_id']) && $_GET['product_id'] !== ''
+                        ? (string) $_GET['product_id']
+                        : null;
+                    $this->json(['data' => $productId
+                        ? $this->productUnits->forProduct($productId)
+                        : $this->productUnits->all()
+                    ]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->productUnits->create($input)], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'product-units' && isset($segments[1])) {
+                $unitId = $segments[1];
+                if (count($segments) === 2 && $method === 'GET') {
+                    $this->json(['data' => $this->stock->unitPosition($unitId)]);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'retire' && $method === 'POST') {
+                    $this->json(['data' => $this->productUnits->retire(
+                        $unitId,
+                        (string) ($input['reason'] ?? '')
+                    )]);
+                    return;
+                }
+            }
+
+            if ($segments === ['inventory', 'stock'] && $method === 'GET') {
+                $this->json(['data' => $this->stock->all()]);
+                return;
+            }
+
+            if (($segments[0] ?? '') === 'inventory' && ($segments[1] ?? '') === 'stock'
+                && isset($segments[2]) && $method === 'GET') {
+                $this->json(['data' => $this->stock->product($segments[2])]);
+                return;
+            }
+
+            if ($segments === ['inventory', 'movements']) {
+                if ($method === 'GET') {
+                    $productId = isset($_GET['product_id']) && $_GET['product_id'] !== ''
+                        ? (string) $_GET['product_id']
+                        : null;
+                    $locationId = isset($_GET['location_id']) && $_GET['location_id'] !== ''
+                        ? (string) $_GET['location_id']
+                        : null;
+                    $this->json(['data' => $this->movements->history($productId, $locationId)]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->movements->record($input)], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'inventory' && ($segments[1] ?? '') === 'movements'
+                && isset($segments[2]) && ($segments[3] ?? '') === 'reverse' && $method === 'POST') {
+                $this->json(['data' => $this->movements->reverse(
+                    $segments[2],
+                    (string) ($input['reason'] ?? '')
+                )], 201);
+                return;
+            }
+
+            if (($segments[0] ?? '') === 'qr' && ($segments[1] ?? '') === 'unit'
+                && isset($segments[2]) && $method === 'GET') {
+                $unit = $this->productUnits->byQr($segments[2]);
+                $this->json(['data' => $this->stock->unitPosition((string) $unit['id'])]);
+                return;
             }
 
             if ($segments === ['quotations']) {
