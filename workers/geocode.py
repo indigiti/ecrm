@@ -99,6 +99,9 @@ def process(path: pathlib.Path) -> bool:
 
 def main() -> int:
     ensure_dirs()
+    if not os.getenv("ECRM_GEOCODER_ENDPOINT", "").strip():
+        print("Geocoding provider is not configured; pending jobs were left untouched")
+        return 0
     limit = max(1, min(int(os.getenv("ECRM_GEOCODER_BATCH", "20")), 100))
     delay = max(0.0, float(os.getenv("ECRM_GEOCODER_DELAY_SECONDS", "1.0")))
     jobs = sorted(PENDING.glob("*.json"))[:limit]
