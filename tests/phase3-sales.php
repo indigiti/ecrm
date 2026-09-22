@@ -13,7 +13,9 @@ use Ecrm\Domain\Products\ProductService;
 use Ecrm\Domain\Sales\InvoiceService;
 use Ecrm\Domain\Sales\QuotationService;
 use Ecrm\Domain\Sales\SalesCalculator;
+use Ecrm\Integrity\IntegrityVerifier;
 use Ecrm\Search\SearchIndex;
+use Ecrm\Search\SearchRebuilder;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\Sequence;
 use InvalidArgumentException;
@@ -141,6 +143,15 @@ try {
     ]);
     expectSales($standalone['quotation_id'] === null, 'Standalone invoice should not require quotation');
     expectSales($standalone['totals']['igst_paise'] === 9000, 'IGST calculation incorrect');
+
+    $rebuilt = (new SearchRebuilder($store, $search))->rebuild();
+    expectSales(($rebuilt['products'] ?? 0) === 1, 'Product search rebuild count incorrect');
+    expectSales(($rebuilt['quotations'] ?? 0) === 1, 'Quotation search rebuild count incorrect');
+    expectSales(($rebuilt['invoices'] ?? 0) === 2, 'Invoice search rebuild count incorrect');
+    expectSales(count($search->search($invoice['number'])) === 1, 'Invoice not found after search rebuild');
+
+    $integrity = (new IntegrityVerifier($store, $root . '/audit'))->verify();
+    expectSales($integrity['ok'] === true, 'Sales integrity verification failed: ' . implode('; ', $integrity['errors']));
 
     echo "Phase 3 sales smoke test passed\n";
 } finally {
