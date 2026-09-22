@@ -107,7 +107,8 @@ final class StockService
         ));
 
         usort($history, static fn(array $a, array $b): int =>
-            strcmp((string) ($a['created_at'] ?? ''), (string) ($b['created_at'] ?? ''))
+            ((int) ($a['ledger_seq'] ?? 0) <=> (int) ($b['ledger_seq'] ?? 0))
+            ?: strcmp((string) ($a['created_at'] ?? ''), (string) ($b['created_at'] ?? ''))
             ?: strcmp((string) ($a['id'] ?? ''), (string) ($b['id'] ?? ''))
         );
 
