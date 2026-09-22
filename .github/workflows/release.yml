@@ -27,6 +27,7 @@ jobs:
       - run: php tests/phase3-sales.php
       - run: php tests/phase4-finance.php
       - run: php tests/operations-inventory.php
+      - run: php tests/workshop.php
       - run: npm install
       - run: npm run build
       - run: php tools/package-release.php
