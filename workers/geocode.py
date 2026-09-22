@@ -78,6 +78,7 @@ def process(path: pathlib.Path) -> bool:
                 "type": "geocode_result",
                 "address_id": job["address_id"],
                 "customer_id": job["customer_id"],
+                "geocode_token": job.get("geocode_token"),
                 "provider": os.getenv("ECRM_GEOCODER_ENDPOINT", ""),
                 "resolved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 **result,
