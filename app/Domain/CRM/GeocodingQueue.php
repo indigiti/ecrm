@@ -20,6 +20,7 @@ final class GeocodingQueue
             'type' => 'geocode_address',
             'address_id' => $address['id'],
             'customer_id' => $address['customer_id'],
+            'geocode_token' => $address['geocode_token'] ?? null,
             'query' => trim(implode(', ', array_filter([
                 $address['address'] ?? '',
                 $address['area'] ?? '',
