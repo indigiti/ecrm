@@ -35,9 +35,10 @@ jobs:
       - run: php tools/package-release.php
       - name: Verify packaged frontend manifest
         run: |
-          php -r '$m=json_decode(file_get_contents("release/public/manifest.json"),true,512,JSON_THROW_ON_ERROR); $e=$m["index.html"]??null; if(!is_array($e)||empty($e["file"])||!is_file("release/public/".$e["file"])) {fwrite(STDERR,"PACKAGED_FRONTEND_MANIFEST_INVALID\n"); exit(1);} foreach(($e["css"]??[]) as $css){if(!is_file("release/public/".$css)){fwrite(STDERR,"PACKAGED_FRONTEND_CSS_MISSING:".$css."\n"); exit(1);}} echo "Packaged frontend manifest verified\n";'
+          php -r '$m=json_decode(file_get_contents("release/public/manifest.json"),true,512,JSON_THROW_ON_ERROR); $e=$m["index.html"]??null; if(!is_array($e)||empty($e["file"])||!is_file("release/public/".$e["file"])) {fwrite(STDERR,"PACKAGED_FRONTEND_MANIFEST_INVALID\n"); exit(1);} foreach(($e["css"]??[]) as $css){if(!is_file("release/public/".$css)){fwrite(STDERR,"PACKAGED_FRONTEND_CSS_MISSING:".$css."\n"); exit(1);}} if(!is_file("release/public/.htaccess")){fwrite(STDERR,"PACKAGED_REWRITE_FILE_MISSING\n"); exit(1);} echo "Packaged frontend manifest and rewrite file verified\n";'
       - uses: actions/upload-artifact@v4
         with:
           name: digiops-release
           path: release/
           if-no-files-found: error
+          include-hidden-files: true
