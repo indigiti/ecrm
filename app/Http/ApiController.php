@@ -33,6 +33,7 @@ use Ecrm\Security\SessionAuth;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\Runtime;
 use Ecrm\Support\Sequence;
+use DomainException;
 use InvalidArgumentException;
 use Throwable;
 
@@ -809,6 +810,8 @@ final class ApiController
             }
 
             $this->json(['error' => 'API route not found'], 404);
+        } catch (DomainException $e) {
+            $this->json(['error' => $e->getMessage()], 403);
         } catch (InvalidArgumentException $e) {
             $this->json(['error' => $e->getMessage()], 422);
         } catch (Throwable $e) {
@@ -838,8 +841,7 @@ final class ApiController
     private function requireRoles(array $user, array $roles): void
     {
         if (!$this->users->isAllowed($user, $roles)) {
-            http_response_code(403);
-            throw new InvalidArgumentException('You do not have permission for this action');
+            throw new DomainException('You do not have permission for this action');
         }
     }
 
