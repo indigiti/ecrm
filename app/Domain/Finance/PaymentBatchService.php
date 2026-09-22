@@ -70,8 +70,6 @@ final class PaymentBatchService
             $this->index($record);
             $this->audit->append('payment_batch.closed', 'payment_batch', $id);
             return $record;
-        }
-    
         });
     }
 
