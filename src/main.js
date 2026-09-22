@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 
 const app = document.querySelector('#app');
 const state = { view: 'dashboard', map: null, searchTimer: null };
-const activeViews = ['dashboard','customers','leads','followups','map'];
+const activeViews = ['dashboard','customers','leads','followups','map','products','quotations','invoices'];
 const nav = [
   ['dashboard','Dashboard'],['customers','Customers'],['leads','Leads'],['followups','Follow-ups'],['map','Map'],
   ['products','Products'],['inventory','Inventory'],['workshop','Workshop'],['quotations','Quotations'],
@@ -19,6 +19,10 @@ function esc(value) {
 
 function money(value) {
   return new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:0}).format(Number(value || 0));
+}
+
+function moneyPaise(value) {
+  return new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(value || 0) / 100);
 }
 
 async function api(path, options) {
@@ -95,6 +99,9 @@ async function searchGlobal(query) {
         box.classList.add('hidden');
         if (el.dataset.type === 'customer') openCustomer(el.dataset.id);
         if (el.dataset.type === 'lead') { state.view = 'leads'; shell(); }
+        if (el.dataset.type === 'product') { state.view = 'products'; shell(); }
+        if (el.dataset.type === 'quotation') { state.view = 'quotations'; shell(); }
+        if (el.dataset.type === 'invoice') { state.view = 'invoices'; shell(); }
       });
     });
   } catch (e) {
@@ -112,6 +119,9 @@ async function renderView() {
     if (state.view === 'leads') return leads(w);
     if (state.view === 'followups') return followups(w);
     if (state.view === 'map') return mapView(w);
+    if (state.view === 'products') return products(w);
+    if (state.view === 'quotations') return quotations(w);
+    if (state.view === 'invoices') return invoices(w);
     return comingSoon(w);
   } catch (e) {
     w.innerHTML = errorCard(e.message);
@@ -127,19 +137,21 @@ async function dashboard(w) {
       metric('Open leads', d.leads, 'Sales pipeline') +
       metric('Follow-ups', d.open_followups, (d.overdue_followups || 0) + ' overdue · ' + (d.due_today || 0) + ' due today') +
       metric('Mapped sites', d.mapped_addresses, 'Resolved locations') +
+      metric('Quotes waiting', d.quotes_awaiting || 0, 'Awaiting decision') +
+      metric('Issued invoices', d.issued_invoices || 0, 'Active receivables') +
     '</section>' +
     '<section class="dash-grid">' +
       '<article class="panel attention"><div><p class="eyebrow">NEEDS ATTENTION</p><h2>' + (d.open_followups ? d.open_followups + ' open follow-up' + (d.open_followups === 1 ? '' : 's') : 'You’re all caught up') + '</h2><p>Tasks and follow-ups stay visible until completed.</p></div><button class="chip" id="open-followups">Open queue</button></article>' +
-      '<article class="panel"><p class="eyebrow">QUICK ACTIONS</p><div class="quick"><button id="quick-customer">+ Customer</button><button id="quick-lead">+ Lead</button><button id="quick-followup">+ Follow-up</button><button id="quick-map">Open Map</button></div></article>' +
+      '<article class="panel"><p class="eyebrow">QUICK ACTIONS</p><div class="quick"><button id="quick-customer">+ Customer</button><button id="quick-lead">+ Lead</button><button id="quick-quote">+ Quotation</button><button id="quick-invoice">+ Invoice</button></div></article>' +
       '<article class="panel wide"><div class="row"><div><p class="eyebrow">RECENT ACTIVITY</p><h2>Business timeline</h2></div></div>' + timeline(d.recent_activity) + '</article>' +
     '</section>';
 
   document.querySelector('#dash-customer').onclick = customerModal;
   document.querySelector('#quick-customer').onclick = customerModal;
   document.querySelector('#quick-lead').onclick = leadModal;
-  document.querySelector('#quick-followup').onclick = function(){ followupModal(); };
+  document.querySelector('#quick-quote').onclick = function(){ salesDocumentModal('quotation'); };
+  document.querySelector('#quick-invoice').onclick = function(){ salesDocumentModal('invoice'); };
   document.querySelector('#open-followups').onclick = function(){ state.view = 'followups'; shell(); };
-  document.querySelector('#quick-map').onclick = function(){ state.view = 'map'; shell(); };
 }
 
 function metric(label, value, note) {
@@ -178,6 +190,7 @@ async function openCustomer(id) {
         '<article class="panel"><p class="eyebrow">CONTACTS</p>' + contactCards(data.contacts) + '</article>' +
         '<article class="panel span2"><p class="eyebrow">ADDRESSES</p>' + addressCards(data.addresses) + '</article>' +
         '<article class="panel"><p class="eyebrow">ACTIVITY</p>' + timeline(data.activities) + '</article>' +
+        '<article class="panel span2"><p class="eyebrow">RECENT BUSINESS</p>' + customerBusiness(data.quotations || [], data.invoices || []) + '</article>' +
       '</section>';
     document.querySelector('#back-customers').onclick = function(){ customers(w); };
     document.querySelector('#edit-customer').onclick = function(){ customerEditModal(c); };
@@ -202,6 +215,17 @@ function addressCards(rows) {
   if (!rows.length) return '<div class="empty-small">No addresses yet.</div>';
   return '<div class="address-grid">' + rows.map(function(a){
     return '<div class="address-card"><div><span class="pill">' + esc(a.type) + '</span><b>' + esc(a.label) + '</b></div><p>' + esc(a.address) + (a.area ? ', ' + esc(a.area) : '') + (a.city ? ', ' + esc(a.city) : '') + (a.pin ? ' ' + esc(a.pin) : '') + '</p><div class="address-foot"><small>' + (a.geocode_status === 'resolved' ? '● Map ready' : '○ Geocode pending') + '</small><button class="soft mini-edit" data-edit-address="' + esc(a.id) + '">Edit</button></div></div>';
+  }).join('') + '</div>';
+}
+
+function customerBusiness(quotes, invoices) {
+  if (!quotes.length && !invoices.length) return '<div class="empty-small">No quotations or invoices yet.</div>';
+  const rows = [];
+  quotes.slice(0,4).forEach(function(q){ rows.push({kind:'Quotation',number:q.number,status:q.status,total:q.totals && q.totals.grand_total_paise,at:q.created_at}); });
+  invoices.slice(0,4).forEach(function(i){ rows.push({kind:'Invoice',number:i.number,status:i.status,total:i.totals && i.totals.grand_total_paise,at:i.created_at}); });
+  rows.sort(function(a,b){ return String(b.at || '').localeCompare(String(a.at || '')); });
+  return '<div class="business-list">' + rows.slice(0,6).map(function(r){
+    return '<div><span><b>' + esc(r.number) + '</b><small>' + esc(r.kind) + ' · ' + esc(r.status) + '</small></span><strong>' + moneyPaise(r.total) + '</strong></div>';
   }).join('') + '</div>';
 }
 
