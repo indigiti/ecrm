@@ -241,6 +241,28 @@ final class SearchRebuilder
             ];
         }
 
+        foreach ($this->store->all('documents') as $row) {
+            $entries[] = [
+                'type' => 'document',
+                'id' => $row['id'],
+                'label' => $row['title'],
+                'terms' => [
+                    $row['original_name'] ?? '',
+                    $row['entity_type'] ?? '',
+                    $row['entity_id'] ?? '',
+                    $row['category'] ?? '',
+                    $row['notes'] ?? '',
+                    $row['status'] ?? '',
+                ],
+                'meta' => [
+                    'entity_type' => $row['entity_type'] ?? null,
+                    'entity_id' => $row['entity_id'] ?? null,
+                    'category' => $row['category'] ?? null,
+                    'status' => $row['status'] ?? null,
+                ],
+            ];
+        }
+
         foreach ($this->store->all('payment_batches') as $row) {
             $entries[] = [
                 'type' => 'payment_batch',
@@ -302,6 +324,7 @@ final class SearchRebuilder
             'product_units' => count($this->store->all('product_units')),
             'inventory_movements' => count($this->store->all('inventory_movements')),
             'workshop_jobs' => count($this->store->all('workshop_jobs')),
+            'documents' => count($this->store->all('documents')),
             'payment_batches' => count($this->store->all('payment_batches')),
             'payments' => count($this->store->all('payments')),
         ];
