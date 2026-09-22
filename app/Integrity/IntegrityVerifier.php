@@ -25,6 +25,9 @@ final class IntegrityVerifier
             'leads' => $this->map('leads'),
             'activities' => $this->map('activities'),
             'products' => $this->map('products'),
+            'locations' => $this->map('locations'),
+            'product_units' => $this->map('product_units'),
+            'inventory_movements' => $this->map('inventory_movements'),
             'quotations' => $this->map('quotations'),
             'invoices' => $this->map('invoices'),
             'payment_batches' => $this->map('payment_batches'),
@@ -46,6 +49,9 @@ final class IntegrityVerifier
         $leads = $collections['leads'];
         $activities = $collections['activities'];
         $products = $collections['products'];
+        $locations = $collections['locations'];
+        $productUnits = $collections['product_units'];
+        $inventoryMovements = $collections['inventory_movements'];
         $quotations = $collections['quotations'];
         $invoices = $collections['invoices'];
         $paymentBatches = $collections['payment_batches'];
@@ -55,6 +61,7 @@ final class IntegrityVerifier
         $this->checkUniqueField($customers, 'number', 'customers', $errors);
         $this->checkUniqueField($leads, 'number', 'leads', $errors);
         $this->checkUniqueField($products, 'code', 'products', $errors);
+        $this->checkUniqueField($locations, 'code', 'locations', $errors);
         $this->checkUniqueField($quotations, 'number', 'quotations', $errors);
         $this->checkUniqueField($invoices, 'number', 'invoices', $errors);
         $this->checkUniqueField($paymentBatches, 'number', 'payment_batches', $errors);
@@ -260,6 +267,201 @@ final class IntegrityVerifier
 
                 if (($row['status'] ?? '') !== $expectedStatus) {
                     $errors[] = "invoices: {$id} status does not match allocation balance; expected {$expectedStatus}";
+                }
+            }
+        }
+
+        $locationTypes = [
+            'showroom','warehouse','zone','rack','workshop_bay',
+            'vehicle','customer_site','temporary','transit','other'
+        ];
+
+        foreach ($locations as $id => $row) {
+            $parentId = $row['parent_id'] ?? null;
+            if ($parentId && !isset($locations[(string) $parentId])) {
+                $errors[] = "locations: {$id} references missing parent {$parentId}";
+            }
+            if (!in_array($row['type'] ?? '', $locationTypes, true)) {
+                $errors[] = "locations: {$id} has invalid type";
+            }
+            if (!in_array($row['status'] ?? '', ['active','inactive','archived'], true)) {
+                $errors[] = "locations: {$id} has invalid status";
+            }
+            if (($row['latitude'] ?? null) === null xor ($row['longitude'] ?? null) === null) {
+                $errors[] = "locations: {$id} has partial coordinates";
+            }
+
+            $seen = [$id => true];
+            $current = $parentId;
+            while ($current) {
+                if (isset($seen[(string) $current])) {
+                    $errors[] = "locations: {$id} hierarchy cycle detected";
+                    break;
+                }
+                $seen[(string) $current] = true;
+                $parent = $locations[(string) $current] ?? null;
+                $current = $parent['parent_id'] ?? null;
+            }
+        }
+
+        $serialSeen = [];
+        $qrSeen = [];
+        foreach ($productUnits as $id => $row) {
+            $productId = (string) ($row['product_id'] ?? '');
+            if ($productId === '' || !isset($products[$productId])) {
+                $errors[] = "product_units: {$id} references missing product {$productId}";
+            } elseif (!($products[$productId]['serial_tracking'] ?? false)) {
+                $errors[] = "product_units: {$id} belongs to product without serial tracking";
+            }
+
+            $serial = trim((string) ($row['serial_no'] ?? ''));
+            if ($serial === '') {
+                $errors[] = "product_units: {$id} has no serial number";
+            } else {
+                $serialKey = strtolower($productId . ':' . $serial);
+                if (isset($serialSeen[$serialKey])) {
+                    $errors[] = "product_units: duplicate serial {$serial} for product {$productId}";
+                }
+                $serialSeen[$serialKey] = true;
+            }
+
+            $token = trim((string) ($row['qr_token'] ?? ''));
+            if ($token === '') {
+                $errors[] = "product_units: {$id} has no QR token";
+            } elseif (isset($qrSeen[$token])) {
+                $errors[] = "product_units: duplicate QR token";
+            } else {
+                $qrSeen[$token] = true;
+            }
+
+            if (!in_array($row['lifecycle_status'] ?? '', ['active','retired'], true)) {
+                $errors[] = "product_units: {$id} has invalid lifecycle status";
+            }
+        }
+
+        $inventoryTypes = [
+            'receive','transfer','issue','return','sale','customer_return',
+            'workshop_in','workshop_out','adjustment','damaged','lost','scrap','reversal'
+        ];
+        $movementReversals = [];
+        $stock = [];
+        $unitLocation = [];
+
+        $orderedMovements = array_values($inventoryMovements);
+        usort($orderedMovements, static fn(array $a, array $b): int =>
+            strcmp((string) ($a['created_at'] ?? ''), (string) ($b['created_at'] ?? ''))
+            ?: strcmp((string) ($a['id'] ?? ''), (string) ($b['id'] ?? ''))
+        );
+
+        foreach ($orderedMovements as $row) {
+            $id = (string) ($row['id'] ?? '');
+            $productId = (string) ($row['product_id'] ?? '');
+            $from = $row['from_location_id'] ?? null;
+            $to = $row['to_location_id'] ?? null;
+            $quantity = (int) ($row['quantity_milli'] ?? 0);
+            $type = (string) ($row['type'] ?? '');
+
+            if ($productId === '' || !isset($products[$productId])) {
+                $errors[] = "inventory_movements: {$id} references missing product {$productId}";
+            }
+            if ($from && !isset($locations[(string) $from])) {
+                $errors[] = "inventory_movements: {$id} references missing source location {$from}";
+            }
+            if ($to && !isset($locations[(string) $to])) {
+                $errors[] = "inventory_movements: {$id} references missing destination location {$to}";
+            }
+            if ($from && $to && $from === $to) {
+                $errors[] = "inventory_movements: {$id} source and destination are identical";
+            }
+            if ($quantity <= 0) {
+                $errors[] = "inventory_movements: {$id} quantity must be positive";
+            }
+            if ((int) round((float) ($row['quantity'] ?? 0) * 1000, 0, PHP_ROUND_HALF_UP) !== $quantity) {
+                $errors[] = "inventory_movements: {$id} quantity and quantity_milli disagree";
+            }
+            if (!in_array($type, $inventoryTypes, true)) {
+                $errors[] = "inventory_movements: {$id} has invalid type";
+            }
+
+            if (in_array($type, ['receive','customer_return'], true) && ($from !== null || $to === null)) {
+                $errors[] = "inventory_movements: {$id} has invalid {$type} endpoints";
+            }
+            if (in_array($type, ['issue','sale','damaged','lost','scrap'], true) && ($from === null || $to !== null)) {
+                $errors[] = "inventory_movements: {$id} has invalid {$type} endpoints";
+            }
+            if (in_array($type, ['transfer','return','workshop_in','workshop_out'], true)
+                && ($from === null || $to === null)) {
+                $errors[] = "inventory_movements: {$id} has invalid {$type} endpoints";
+            }
+            if ($type === 'adjustment' && (($from === null) === ($to === null))) {
+                $errors[] = "inventory_movements: {$id} adjustment must have exactly one endpoint";
+            }
+
+            if ($type === 'reversal') {
+                $originalId = (string) ($row['reversal_of'] ?? '');
+                $original = $inventoryMovements[$originalId] ?? null;
+                if (!$original || ($original['type'] ?? '') === 'reversal') {
+                    $errors[] = "inventory_movements: {$id} references invalid original movement {$originalId}";
+                } else {
+                    if (isset($movementReversals[$originalId])) {
+                        $errors[] = "inventory_movements: movement {$originalId} has multiple reversals";
+                    }
+                    $movementReversals[$originalId] = true;
+                    if ($quantity !== (int) ($original['quantity_milli'] ?? 0)) {
+                        $errors[] = "inventory_movements: {$id} reversal quantity does not match original";
+                    }
+                    if ($from !== ($original['to_location_id'] ?? null)
+                        || $to !== ($original['from_location_id'] ?? null)
+                        || ($row['product_id'] ?? null) !== ($original['product_id'] ?? null)
+                        || ($row['product_unit_id'] ?? null) !== ($original['product_unit_id'] ?? null)) {
+                        $errors[] = "inventory_movements: {$id} reversal does not mirror original movement";
+                    }
+                    if (trim((string) ($row['reason'] ?? '')) === '') {
+                        $errors[] = "inventory_movements: {$id} reversal has no reason";
+                    }
+                }
+            }
+
+            $unitId = $row['product_unit_id'] ?? null;
+            if ($unitId) {
+                if (!isset($productUnits[(string) $unitId])) {
+                    $errors[] = "inventory_movements: {$id} references missing product unit {$unitId}";
+                } else {
+                    if (($productUnits[(string) $unitId]['product_id'] ?? null) !== $productId) {
+                        $errors[] = "inventory_movements: {$id} unit does not belong to product";
+                    }
+                    if ($quantity !== 1000) {
+                        $errors[] = "inventory_movements: {$id} serialized movement quantity must be 1";
+                    }
+                    $current = $unitLocation[(string) $unitId] ?? null;
+                    if ($from !== $current) {
+                        $errors[] = "inventory_movements: {$id} serialized unit source does not match ledger position";
+                    }
+                    $unitLocation[(string) $unitId] = $to;
+                }
+            } elseif (isset($products[$productId]) && ($products[$productId]['serial_tracking'] ?? false)) {
+                $errors[] = "inventory_movements: {$id} serialized product movement has no unit";
+            }
+
+            if ($from) {
+                $key = $productId . ':' . $from;
+                $stock[$key] = ($stock[$key] ?? 0) - $quantity;
+                if ($stock[$key] < 0) {
+                    $errors[] = "inventory_movements: {$id} drives stock negative at location {$from}";
+                }
+            }
+            if ($to) {
+                $key = $productId . ':' . $to;
+                $stock[$key] = ($stock[$key] ?? 0) + $quantity;
+            }
+        }
+
+        foreach ($locations as $id => $row) {
+            if (($row['status'] ?? '') === 'active') continue;
+            foreach ($products as $productId => $_product) {
+                if (($stock[$productId . ':' . $id] ?? 0) > 0) {
+                    $warnings[] = "locations: {$id} is not active but still holds stock";
+                    break;
                 }
             }
         }
