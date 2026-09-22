@@ -27,6 +27,9 @@ final class IntegrityVerifier
             'products' => $this->map('products'),
             'quotations' => $this->map('quotations'),
             'invoices' => $this->map('invoices'),
+            'payment_batches' => $this->map('payment_batches'),
+            'payments' => $this->map('payments'),
+            'payment_allocations' => $this->map('payment_allocations'),
         ];
 
         foreach ($collections as $name => $rows) {
@@ -45,12 +48,17 @@ final class IntegrityVerifier
         $products = $collections['products'];
         $quotations = $collections['quotations'];
         $invoices = $collections['invoices'];
+        $paymentBatches = $collections['payment_batches'];
+        $payments = $collections['payments'];
+        $paymentAllocations = $collections['payment_allocations'];
 
         $this->checkUniqueField($customers, 'number', 'customers', $errors);
         $this->checkUniqueField($leads, 'number', 'leads', $errors);
         $this->checkUniqueField($products, 'code', 'products', $errors);
         $this->checkUniqueField($quotations, 'number', 'quotations', $errors);
         $this->checkUniqueField($invoices, 'number', 'invoices', $errors);
+        $this->checkUniqueField($paymentBatches, 'number', 'payment_batches', $errors);
+        $this->checkUniqueField($payments, 'number', 'payments', $errors);
 
         foreach ($contacts as $id => $row) {
             $customerId = (string) ($row['customer_id'] ?? '');
@@ -123,6 +131,136 @@ final class IntegrityVerifier
             }
             if (($row['status'] ?? '') === 'void' && trim((string) ($row['void_reason'] ?? '')) === '') {
                 $errors[] = "invoices: {$id} is void without reason";
+            }
+        }
+
+        foreach ($paymentBatches as $id => $row) {
+            $customerId = $row['customer_id'] ?? null;
+            if ($customerId && !isset($customers[(string) $customerId])) {
+                $errors[] = "payment_batches: {$id} references missing customer {$customerId}";
+            }
+            if (!in_array($row['status'] ?? '', ['open','closed'], true)) {
+                $errors[] = "payment_batches: {$id} has invalid status";
+            }
+            if (($row['status'] ?? '') === 'closed' && empty($row['closed_at'])) {
+                $errors[] = "payment_batches: {$id} is closed without closed_at";
+            }
+        }
+
+        $paymentNet = array_fill_keys(array_keys($payments), 0);
+        $invoiceNet = array_fill_keys(array_keys($invoices), 0);
+        $reversed = [];
+
+        foreach ($paymentAllocations as $id => $row) {
+            $paymentId = (string) ($row['payment_id'] ?? '');
+            $invoiceId = (string) ($row['invoice_id'] ?? '');
+            $customerId = (string) ($row['customer_id'] ?? '');
+            $amount = (int) ($row['amount_paise'] ?? 0);
+            $type = (string) ($row['type'] ?? '');
+
+            if (!isset($payments[$paymentId])) {
+                $errors[] = "payment_allocations: {$id} references missing payment {$paymentId}";
+            }
+            if (!isset($invoices[$invoiceId])) {
+                $errors[] = "payment_allocations: {$id} references missing invoice {$invoiceId}";
+            }
+            if (!isset($customers[$customerId])) {
+                $errors[] = "payment_allocations: {$id} references missing customer {$customerId}";
+            }
+
+            if (isset($payments[$paymentId]) && ($payments[$paymentId]['customer_id'] ?? null) !== $customerId) {
+                $errors[] = "payment_allocations: {$id} customer does not match payment";
+            }
+            if (isset($invoices[$invoiceId]) && ($invoices[$invoiceId]['customer_id'] ?? null) !== $customerId) {
+                $errors[] = "payment_allocations: {$id} customer does not match invoice";
+            }
+
+            if ($type === 'allocation') {
+                if ($amount <= 0) $errors[] = "payment_allocations: {$id} allocation amount must be positive";
+                if (!empty($row['reversal_of'])) $errors[] = "payment_allocations: {$id} allocation must not have reversal_of";
+            } elseif ($type === 'reversal') {
+                if ($amount >= 0) $errors[] = "payment_allocations: {$id} reversal amount must be negative";
+                $originalId = (string) ($row['reversal_of'] ?? '');
+                $original = $paymentAllocations[$originalId] ?? null;
+                if (!$original || ($original['type'] ?? '') !== 'allocation') {
+                    $errors[] = "payment_allocations: {$id} references invalid original allocation {$originalId}";
+                } else {
+                    if (isset($reversed[$originalId])) {
+                        $errors[] = "payment_allocations: allocation {$originalId} has multiple reversals";
+                    }
+                    $reversed[$originalId] = true;
+                    if ($amount !== -abs((int) ($original['amount_paise'] ?? 0))) {
+                        $errors[] = "payment_allocations: {$id} reversal amount does not match original";
+                    }
+                    foreach (['payment_id','invoice_id','customer_id'] as $field) {
+                        if (($row[$field] ?? null) !== ($original[$field] ?? null)) {
+                            $errors[] = "payment_allocations: {$id} reversal {$field} does not match original";
+                        }
+                    }
+                }
+            } else {
+                $errors[] = "payment_allocations: {$id} has invalid type";
+            }
+
+            if (isset($paymentNet[$paymentId])) $paymentNet[$paymentId] += $amount;
+            if (isset($invoiceNet[$invoiceId])) $invoiceNet[$invoiceId] += $amount;
+        }
+
+        $validMethods = ['cash','upi','neft','rtgs','imps','cheque','card','bank_transfer','credit_note','other'];
+        foreach ($payments as $id => $row) {
+            $customerId = (string) ($row['customer_id'] ?? '');
+            if ($customerId === '' || !isset($customers[$customerId])) {
+                $errors[] = "payments: {$id} references missing customer {$customerId}";
+            }
+            if ((int) ($row['amount_paise'] ?? 0) <= 0) {
+                $errors[] = "payments: {$id} amount must be positive";
+            }
+            if (!in_array($row['method'] ?? '', $validMethods, true)) {
+                $errors[] = "payments: {$id} has invalid method";
+            }
+            if (!in_array($row['status'] ?? '', ['posted','void'], true)) {
+                $errors[] = "payments: {$id} has invalid status";
+            }
+
+            $batchId = $row['batch_id'] ?? null;
+            if ($batchId) {
+                if (!isset($paymentBatches[(string) $batchId])) {
+                    $errors[] = "payments: {$id} references missing batch {$batchId}";
+                } elseif (!empty($paymentBatches[(string) $batchId]['customer_id'])
+                    && $paymentBatches[(string) $batchId]['customer_id'] !== $customerId) {
+                    $errors[] = "payments: {$id} customer does not match batch";
+                }
+            }
+
+            $net = (int) ($paymentNet[$id] ?? 0);
+            if ($net < 0) $errors[] = "payments: {$id} has negative net allocation";
+            if ($net > (int) ($row['amount_paise'] ?? 0)) {
+                $errors[] = "payments: {$id} is over-allocated";
+            }
+            if (($row['status'] ?? '') === 'void') {
+                if ($net !== 0) $errors[] = "payments: {$id} is void with active allocations";
+                if (trim((string) ($row['void_reason'] ?? '')) === '') $errors[] = "payments: {$id} is void without reason";
+            }
+        }
+
+        foreach ($invoices as $id => $row) {
+            $net = (int) ($invoiceNet[$id] ?? 0);
+            $total = (int) ($row['totals']['grand_total_paise'] ?? 0);
+
+            if ($net < 0) $errors[] = "invoices: {$id} has negative net allocation";
+            if ($net > $total) $errors[] = "invoices: {$id} is over-allocated";
+            if (($row['status'] ?? '') === 'void' && $net !== 0) {
+                $errors[] = "invoices: {$id} is void with active allocations";
+            }
+
+            if (($row['status'] ?? '') !== 'void') {
+                $expectedStatus = empty($row['issued_at'])
+                    ? 'draft'
+                    : ($net <= 0 ? 'issued' : ($net >= $total ? 'paid' : 'partially_paid'));
+
+                if (($row['status'] ?? '') !== $expectedStatus) {
+                    $errors[] = "invoices: {$id} status does not match allocation balance; expected {$expectedStatus}";
+                }
             }
         }
 
