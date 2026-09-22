@@ -360,57 +360,7 @@ async function leads(w) {
         const payload = await api('leads/' + btn.dataset.convert + '/convert',{method:'POST',body:{}});
         toast('Lead converted to ' + payload.data.customer.number);
         state.view = 'customers';
-        async function boot() {
-  app.innerHTML = '<main class="boot-screen">Loading eCRM…</main>';
-  try {
-    const status = await api('auth/status');
-    if (status.setup_required) {
-      renderAuth(true);
-      return;
-    }
-    if (!status.authenticated) {
-      renderAuth(false);
-      return;
-    }
-    state.currentUser = status.user;
-    state.csrfToken = status.csrf_token;
-    shell();
-  } catch(e) {
-    app.innerHTML = '<main class="boot-screen"><b>eCRM could not start</b><span>' + esc(e.message) + '</span></main>';
-  }
-}
-
-function renderAuth(setupRequired) {
-  state.currentUser = null;
-  state.csrfToken = null;
-  const title = setupRequired ? 'Create first admin' : 'Sign in';
-  const subtitle = setupRequired ? 'Initialize this eCRM installation with its first administrator.' : 'Use your eCRM account to continue.';
-  const button = setupRequired ? 'Create Admin' : 'Sign In';
-
-  app.innerHTML =
-    '<main class="auth-screen"><section class="auth-card"><div class="brand auth-brand"><span class="logo">e</span><div><b>eCRM</b><small>Business workspace</small></div></div><p class="eyebrow">' + (setupRequired ? 'FIRST RUN' : 'SECURE ACCESS') + '</p><h1>' + title + '</h1><p>' + subtitle + '</p><form id="auth-form" class="auth-form">' +
-      (setupRequired ? '<label>Name<input required name="name" autocomplete="name"></label>' : '') +
-      '<label>Email<input required type="email" name="email" autocomplete="username"></label><label>Password<input required type="password" minlength="12" name="password" autocomplete="' + (setupRequired ? 'new-password' : 'current-password') + '"></label>' +
-      '<button class="primary" type="submit">' + button + '</button><div id="auth-error" class="auth-error"></div></form></section></main>';
-
-  document.querySelector('#auth-form').onsubmit = async function(e){
-    e.preventDefault();
-    const error = document.querySelector('#auth-error');
-    error.textContent = '';
-    const payload = Object.fromEntries(new FormData(e.currentTarget).entries());
-    try {
-      const result = await api(setupRequired ? 'auth/setup' : 'auth/login',{method:'POST',body:payload});
-      state.currentUser = result.data;
-      state.csrfToken = result.csrf_token;
-      state.view = 'dashboard';
-      shell();
-    } catch(err) {
-      error.textContent = err.message;
-    }
-  };
-}
-
-boot();
+        shell();
         setTimeout(function(){ openCustomer(payload.data.customer.id); }, 0);
       } catch (e) { btn.disabled = false; toast(e.message,true); }
     };
@@ -1844,4 +1794,54 @@ function errorCard(message) {
   return '<article class="panel error-card"><b>Could not load this workspace</b><span>' + esc(message) + '</span></article>';
 }
 
-shell();
+async function boot() {
+  app.innerHTML = '<main class="boot-screen">Loading eCRM…</main>';
+  try {
+    const status = await api('auth/status');
+    if (status.setup_required) {
+      renderAuth(true);
+      return;
+    }
+    if (!status.authenticated) {
+      renderAuth(false);
+      return;
+    }
+    state.currentUser = status.user;
+    state.csrfToken = status.csrf_token;
+    shell();
+  } catch(e) {
+    app.innerHTML = '<main class="boot-screen"><b>eCRM could not start</b><span>' + esc(e.message) + '</span></main>';
+  }
+}
+
+function renderAuth(setupRequired) {
+  state.currentUser = null;
+  state.csrfToken = null;
+  const title = setupRequired ? 'Create first admin' : 'Sign in';
+  const subtitle = setupRequired ? 'Initialize this eCRM installation with its first administrator.' : 'Use your eCRM account to continue.';
+  const button = setupRequired ? 'Create Admin' : 'Sign In';
+
+  app.innerHTML =
+    '<main class="auth-screen"><section class="auth-card"><div class="brand auth-brand"><span class="logo">e</span><div><b>eCRM</b><small>Business workspace</small></div></div><p class="eyebrow">' + (setupRequired ? 'FIRST RUN' : 'SECURE ACCESS') + '</p><h1>' + title + '</h1><p>' + subtitle + '</p><form id="auth-form" class="auth-form">' +
+      (setupRequired ? '<label>Name<input required name="name" autocomplete="name"></label>' : '') +
+      '<label>Email<input required type="email" name="email" autocomplete="username"></label><label>Password<input required type="password" minlength="12" name="password" autocomplete="' + (setupRequired ? 'new-password' : 'current-password') + '"></label>' +
+      '<button class="primary" type="submit">' + button + '</button><div id="auth-error" class="auth-error"></div></form></section></main>';
+
+  document.querySelector('#auth-form').onsubmit = async function(e){
+    e.preventDefault();
+    const error = document.querySelector('#auth-error');
+    error.textContent = '';
+    const payload = Object.fromEntries(new FormData(e.currentTarget).entries());
+    try {
+      const result = await api(setupRequired ? 'auth/setup' : 'auth/login',{method:'POST',body:payload});
+      state.currentUser = result.data;
+      state.csrfToken = result.csrf_token;
+      state.view = 'dashboard';
+      shell();
+    } catch(err) {
+      error.textContent = err.message;
+    }
+  };
+}
+
+boot();
