@@ -4,8 +4,8 @@ import 'leaflet/dist/leaflet.css';
 import QRCode from 'qrcode';
 
 const app = document.querySelector('#app');
-const state = { view: 'dashboard', map: null, searchTimer: null, financeTab: 'receipts', inventoryTab: 'stock' };
-const activeViews = ['dashboard','customers','leads','followups','map','products','inventory','workshop','quotations','invoices','payments'];
+const state = { view: 'dashboard', map: null, searchTimer: null, financeTab: 'receipts', inventoryTab: 'stock', reportType: 'sales' };
+const activeViews = ['dashboard','customers','leads','followups','map','products','inventory','workshop','quotations','invoices','payments','reports'];
 const nav = [
   ['dashboard','Dashboard'],['customers','Customers'],['leads','Leads'],['followups','Follow-ups'],['map','Map'],
   ['products','Products'],['inventory','Inventory'],['workshop','Workshop'],['quotations','Quotations'],
@@ -131,6 +131,7 @@ async function renderView() {
     if (state.view === 'quotations') return quotations(w);
     if (state.view === 'invoices') return invoices(w);
     if (state.view === 'payments') return paymentsWorkspace(w);
+    if (state.view === 'reports') return reportsWorkspace(w);
     return comingSoon(w);
   } catch (e) {
     w.innerHTML = errorCard(e.message);
@@ -1482,6 +1483,155 @@ async function workshopCheckOutModal(job) {
       }
     );
   } catch(e) { toast(e.message,true); }
+}
+
+
+async function reportsWorkspace(w) {
+  const reportOptions = [
+    ['sales','Sales'],
+    ['collections','Collections'],
+    ['outstanding','Outstanding'],
+    ['ageing','Ageing'],
+    ['invoice_register','Invoice Register'],
+    ['payment_register','Payment Register'],
+    ['payment_mode_summary','Payment Mode Summary'],
+    ['tax_summary','Tax Summary'],
+    ['quotation_conversion','Quotation Conversion'],
+    ['customer_sales','Customer-wise Sales'],
+    ['monthly_sales','Monthly Sales']
+  ];
+
+  try {
+    const customers = (await api('customers')).data;
+    const selected = state.reportType || 'sales';
+    const customerOptions = '<option value="">All customers</option>' + customers.map(function(c){
+      return '<option value="' + esc(c.id) + '">' + esc(c.name) + ' · ' + esc(c.number) + '</option>';
+    }).join('');
+
+    w.innerHTML =
+      '<section class="page-head"><div><p class="eyebrow">REPORTS</p><h1>Operational Reports</h1><p>Read-only projections from issued invoices, posted payments and immutable allocation ledgers.</p></div><div class="record-actions"><button class="soft" id="report-print">Print / PDF</button><button class="primary" id="report-csv">Export CSV</button></div></section>' +
+      '<article class="panel report-controls"><div class="report-filter-grid"><label>Report<select id="report-type">' + reportOptions.map(function(item){ return '<option value="' + item[0] + '"' + (selected === item[0] ? ' selected' : '') + '>' + item[1] + '</option>'; }).join('') + '</select></label><label>From<input id="report-from" type="date"></label><label>To<input id="report-to" type="date"></label><label>Customer<select id="report-customer">' + customerOptions + '</select></label><button class="primary" id="report-run">Run Report</button></div></article>' +
+      '<div id="report-output"><div class="loading">Loading report…</div></div>';
+
+    const output = document.querySelector('#report-output');
+    let current = null;
+
+    async function loadReport() {
+      const type = document.querySelector('#report-type').value;
+      state.reportType = type;
+      const params = new URLSearchParams();
+      const from = document.querySelector('#report-from').value;
+      const to = document.querySelector('#report-to').value;
+      const customerId = document.querySelector('#report-customer').value;
+      if (from) params.set('date_from',from);
+      if (to) params.set('date_to',to);
+      if (customerId) params.set('customer_id',customerId);
+
+      output.innerHTML = '<div class="loading">Loading report…</div>';
+      try {
+        current = (await api('reports/' + encodeURIComponent(type) + (params.toString() ? '?' + params.toString() : ''))).data;
+        renderReportResult(output,current);
+      } catch(e) {
+        current = null;
+        output.innerHTML = errorCard(e.message);
+      }
+    }
+
+    document.querySelector('#report-run').onclick = loadReport;
+    document.querySelector('#report-type').onchange = loadReport;
+    document.querySelector('#report-print').onclick = function(){ window.print(); };
+    document.querySelector('#report-csv').onclick = function(){
+      if (!current) { toast('Run a report before exporting',true); return; }
+      exportReportCsv(current);
+    };
+    await loadReport();
+  } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
+function renderReportResult(root, data) {
+  const summary = data.summary || {};
+  const summaryEntries = Object.entries(summary);
+  const summaryHtml = summaryEntries.length ? '<section class="metrics report-summary">' + summaryEntries.map(function(entry){
+    return metric(reportColumnLabel(entry[0]), reportValue(entry[0],entry[1]), 'Report total');
+  }).join('') + '</section>' : '';
+
+  const rows = data.rows || [];
+  if (!rows.length) {
+    root.innerHTML = summaryHtml + '<div class="empty-state"><b>No rows for this report</b><span>Adjust the date or customer filters.</span></div>';
+    return;
+  }
+
+  const columns = Object.keys(rows[0]);
+  const head = columns.map(function(key){ return '<span>' + esc(reportColumnLabel(key)) + '</span>'; }).join('');
+  const body = rows.map(function(row){
+    return '<div class="report-row" style="--cols:' + columns.length + '">' + columns.map(function(key){
+      return '<span>' + esc(reportValue(key,row[key])) + '</span>';
+    }).join('') + '</div>';
+  }).join('');
+
+  root.innerHTML =
+    summaryHtml +
+    '<article class="table-card report-table"><div class="report-table-head" style="--cols:' + columns.length + '">' + head + '</div><div class="report-table-body">' + body + '</div></article>' +
+    '<p class="report-generated">Generated ' + esc(new Date(data.generated_at).toLocaleString()) + '</p>';
+}
+
+function reportColumnLabel(key) {
+  const special = {
+    total_paise:'Total',
+    taxable_paise:'Taxable',
+    tax_paise:'Tax',
+    cgst_paise:'CGST',
+    sgst_paise:'SGST',
+    igst_paise:'IGST',
+    amount_paise:'Amount',
+    allocated_paise:'Allocated',
+    unallocated_paise:'Unallocated',
+    outstanding_paise:'Outstanding',
+    invoice_count:'Invoices',
+    receipt_count:'Receipts',
+    customer_count:'Customers',
+    month_count:'Months',
+    quotation_count:'Quotations',
+    approved_count:'Approved',
+    invoiced_from_approved:'Converted to Invoice',
+    total_outstanding_paise:'Total Outstanding'
+  };
+  if (special[key]) return special[key];
+  return String(key || '').replaceAll('_',' ').replace(/\b\w/g,function(c){ return c.toUpperCase(); });
+}
+
+function reportValue(key, value) {
+  if (value == null || value === '') return '—';
+  if (String(key).endsWith('_paise')) return moneyPaise(value);
+  if (key === 'method' || key === 'status' || key === 'bucket_key') return String(value).replaceAll('_',' ');
+  return String(value);
+}
+
+function csvCell(value) {
+  const raw = String(value == null ? '' : value);
+  return '"' + raw.replaceAll('"','""') + '"';
+}
+
+function exportReportCsv(data) {
+  const rows = data.rows || [];
+  if (!rows.length) { toast('No report rows to export',true); return; }
+  const columns = Object.keys(rows[0]);
+  const lines = [
+    columns.map(function(key){ return csvCell(reportColumnLabel(key)); }).join(','),
+    ...rows.map(function(row){ return columns.map(function(key){
+      const value = String(key).endsWith('_paise') ? (Number(row[key] || 0) / 100).toFixed(2) : (row[key] == null ? '' : row[key]);
+      return csvCell(value);
+    }).join(','); })
+  ];
+  const blob = new Blob([lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = String(data.title || 'report').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(function(){ URL.revokeObjectURL(url); },0);
 }
 
 function comingSoon(w) {
