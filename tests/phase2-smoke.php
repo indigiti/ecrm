@@ -38,16 +38,31 @@ try {
     $customer = $customers->create(['name' => 'ABC Industries', 'mobile' => '9999999999']);
     expect(str_starts_with($customer['number'], 'CUST-'), 'Customer number missing');
     expect(strlen($customer['id']) === 36, 'UUIDv7 format invalid');
-    $contacts->create($customer['id'], ['name' => 'Asha', 'mobile' => '8888888888', 'is_primary' => true]);
+    $contact = $contacts->create($customer['id'], ['name' => 'Asha', 'mobile' => '8888888888', 'is_primary' => true]);
+    $contact = $contacts->update($contact['id'], ['designation' => 'Procurement']);
+    expect($contact['designation'] === 'Procurement', 'Contact update failed');
 
     $pending = $addresses->create($customer['id'], ['type' => 'site', 'address' => 'Industrial Estate', 'city' => 'Pune', 'pin' => '411001']);
     expect($pending['geocode_status'] === 'pending', 'Address should require geocoding');
     expect(is_file($root . '/jobs/pending/' . $pending['id'] . '.json'), 'Geocoding job was not queued');
+    $job = json_decode((string) file_get_contents($root . '/jobs/pending/' . $pending['id'] . '.json'), true);
+    expect(($job['geocode_token'] ?? null) === $pending['geocode_token'], 'Geocoding token missing');
+    $oldToken = $pending['geocode_token'];
+    $pending = $addresses->update($pending['id'], ['address' => 'Updated Industrial Estate']);
+    expect($pending['geocode_token'] !== $oldToken, 'Address edit must issue a new geocoding token');
+    try {
+        $addresses->applyGeocode($pending['id'], 18.5, 73.8, 0.5, $oldToken);
+        throw new RuntimeException('Stale geocode was accepted');
+    } catch (InvalidArgumentException $expected) {
+        expect($expected->getMessage() === 'Stale geocoding result', 'Unexpected stale geocode error');
+    }
 
     $mapped = $addresses->create($customer['id'], ['type' => 'warehouse', 'address' => 'Warehouse', 'city' => 'Pune', 'latitude' => 18.5204, 'longitude' => 73.8567]);
     expect(count($addresses->mapped()) === 1, 'Mapped address query failed');
 
     $lead = $leads->create(['name' => 'Expansion project', 'company' => 'Newco Industries', 'mobile' => '7777777777']);
+    $lead = $leads->update($lead['id'], ['requirement' => '5000 sq ft expansion']);
+    expect($lead['requirement'] === '5000 sq ft expansion', 'Lead update failed');
     $lead = $leads->changeStage($lead['id'], 'requirement');
     expect($lead['stage'] === 'requirement', 'Lead stage update failed');
 
