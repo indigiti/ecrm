@@ -7,6 +7,7 @@ define('ECRM_PRIVATE_ROOT', $root);
 require dirname(__DIR__) . '/app/bootstrap.php';
 
 use Ecrm\Audit\AuditLedger;
+use Ecrm\Domain\Admin\SettingsService;
 use Ecrm\Domain\Customers\CustomerService;
 use Ecrm\Domain\Finance\AllocationService;
 use Ecrm\Domain\Finance\PaymentBatchService;
@@ -52,11 +53,13 @@ try {
     $audit = new AuditLedger($root . '/audit');
     $sequence = new Sequence($root . '/data/sequences');
     $calculator = new SalesCalculator();
+    $settings = new SettingsService(new AtomicJsonStore($root . '/config'), $audit);
+    $settings->update(['company_name' => 'Finance Prefix Test', 'invoice_prefix' => 'BILL', 'payment_prefix' => 'RCPT']);
 
     $customers = new CustomerService($store, $sequence, $search, $audit);
-    $invoices = new InvoiceService($store, $sequence, $search, $audit, $calculator, $root . '/locks');
+    $invoices = new InvoiceService($store, $sequence, $search, $audit, $calculator, $root . '/locks', $settings);
     $batches = new PaymentBatchService($store, $sequence, $search, $audit, $root . '/locks');
-    $payments = new PaymentService($store, $sequence, $search, $audit, $root . '/locks');
+    $payments = new PaymentService($store, $sequence, $search, $audit, $root . '/locks', $settings);
     $allocations = new AllocationService($store, $audit, $root . '/locks', $search);
     $receivables = new ReceivablesService($store, $allocations);
 
@@ -106,6 +109,8 @@ try {
         'reference' => 'UTR-ONE',
         'method_meta' => ['utr' => 'UTR-ONE', 'bank' => 'Test Bank'],
     ]);
+
+    expectFinance(str_starts_with($payment1['number'], 'RCPT-'), 'Configured payment prefix not applied');
 
     $payment2 = $payments->create([
         'customer_id' => $customer['id'],
