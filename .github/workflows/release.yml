@@ -35,6 +35,6 @@ jobs:
       - run: php tools/package-release.php
       - uses: actions/upload-artifact@v4
         with:
-          name: ecrm-release
+          name: digiops-release
           path: release/
           if-no-files-found: error
