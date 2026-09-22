@@ -11,6 +11,10 @@ use Ecrm\Domain\CRM\LeadService;
 use Ecrm\Domain\Customers\AddressService;
 use Ecrm\Domain\Customers\ContactService;
 use Ecrm\Domain\Customers\CustomerService;
+use Ecrm\Domain\Finance\AllocationService;
+use Ecrm\Domain\Finance\PaymentBatchService;
+use Ecrm\Domain\Finance\PaymentService;
+use Ecrm\Domain\Finance\ReceivablesService;
 use Ecrm\Domain\Products\ProductService;
 use Ecrm\Domain\Sales\InvoiceService;
 use Ecrm\Domain\Sales\QuotationService;
@@ -34,6 +38,10 @@ final class ApiController
     private ProductService $products;
     private QuotationService $quotations;
     private InvoiceService $invoices;
+    private PaymentBatchService $paymentBatches;
+    private PaymentService $payments;
+    private AllocationService $allocations;
+    private ReceivablesService $receivables;
     private SearchIndex $search;
 
     public function __construct()
@@ -44,6 +52,7 @@ final class ApiController
         $sequence = new Sequence(Runtime::dataRoot() . '/sequences');
         $geocoding = new GeocodingQueue(Runtime::jobsRoot());
         $calculator = new SalesCalculator();
+        $locks = Runtime::locksRoot();
 
         $this->customers = new CustomerService($this->store, $sequence, $this->search, $audit);
         $this->contacts = new ContactService($this->store, $this->search, $audit);
@@ -53,7 +62,11 @@ final class ApiController
         $this->activities = new ActivityService($this->store, $audit);
         $this->products = new ProductService($this->store, $sequence, $this->search, $audit);
         $this->quotations = new QuotationService($this->store, $sequence, $this->search, $audit, $calculator);
-        $this->invoices = new InvoiceService($this->store, $sequence, $this->search, $audit, $calculator);
+        $this->invoices = new InvoiceService($this->store, $sequence, $this->search, $audit, $calculator, $locks);
+        $this->paymentBatches = new PaymentBatchService($this->store, $sequence, $this->search, $audit);
+        $this->payments = new PaymentService($this->store, $sequence, $this->search, $audit, $locks);
+        $this->allocations = new AllocationService($this->store, $audit, $locks, $this->search);
+        $this->receivables = new ReceivablesService($this->store, $this->allocations);
     }
 
     public function handle(): void
@@ -87,6 +100,7 @@ final class ApiController
                     $this->invoices->all(),
                     static fn(array $invoice): bool => in_array($invoice['status'] ?? '', ['issued','partially_paid'], true)
                 );
+                $finance = $this->receivables->totals();
 
                 $this->json([
                     'customers' => count($this->customers->all()),
@@ -97,6 +111,10 @@ final class ApiController
                     'mapped_addresses' => count($this->addresses->mapped()),
                     'quotes_awaiting' => count($quotesAwaiting),
                     'issued_invoices' => count($issuedInvoices),
+                    'collected_paise' => $finance['collected_paise'],
+                    'outstanding_paise' => $finance['outstanding_paise'],
+                    'overdue_paise' => $finance['overdue_paise'],
+                    'unallocated_credit_paise' => $finance['unallocated_credit_paise'],
                     'recent_activity' => array_slice($activities, 0, 8),
                 ]);
                 return;
@@ -131,6 +149,8 @@ final class ApiController
                         'activities' => $this->activities->all($id),
                         'quotations' => array_values(array_filter($this->quotations->all(), static fn(array $q): bool => ($q['customer_id'] ?? null) === $id)),
                         'invoices' => array_values(array_filter($this->invoices->all(), static fn(array $i): bool => ($i['customer_id'] ?? null) === $id)),
+                        'payments' => array_values(array_filter($this->payments->all(), static fn(array $p): bool => ($p['customer_id'] ?? null) === $id)),
+                        'receivables' => $this->receivables->ageing($id),
                     ]]);
                     return;
                 }
@@ -140,6 +160,10 @@ final class ApiController
                 }
                 if (($segments[2] ?? '') === 'addresses' && $method === 'POST') {
                     $this->json(['data' => $this->addresses->create($id, $input)], 201);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'statement' && $method === 'GET') {
+                    $this->json(['data' => $this->receivables->customerStatement($id)]);
                     return;
                 }
             }
@@ -283,6 +307,105 @@ final class ApiController
                     $this->json(['data' => $this->invoices->void($id, (string) ($input['reason'] ?? ''))]);
                     return;
                 }
+            }
+
+            if ($segments === ['payment-batches']) {
+                if ($method === 'GET') {
+                    $this->json(['data' => $this->paymentBatches->all()]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->paymentBatches->create($input)], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'payment-batches' && isset($segments[1])) {
+                if (count($segments) === 2 && $method === 'GET') {
+                    $this->json(['data' => $this->paymentBatches->get($segments[1])]);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'close' && $method === 'POST') {
+                    $this->json(['data' => $this->paymentBatches->close($segments[1])]);
+                    return;
+                }
+            }
+
+            if ($segments === ['payments']) {
+                if ($method === 'GET') {
+                    $this->json(['data' => $this->payments->all(), 'methods' => PaymentService::METHODS]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->payments->create($input)], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'payments' && isset($segments[1])) {
+                $paymentId = $segments[1];
+
+                if (count($segments) === 2 && $method === 'GET') {
+                    $payment = $this->payments->get($paymentId);
+                    $allocated = $this->allocations->netForPayment($paymentId);
+                    $this->json(['data' => [
+                        'payment' => $payment,
+                        'allocations' => $this->allocations->forPayment($paymentId),
+                        'allocated_paise' => $allocated,
+                        'available_paise' => max(0, (int) $payment['amount_paise'] - $allocated),
+                    ]]);
+                    return;
+                }
+
+                if (($segments[2] ?? '') === 'void' && $method === 'POST') {
+                    $this->json(['data' => $this->payments->void($paymentId, (string) ($input['reason'] ?? ''))]);
+                    return;
+                }
+
+                if (($segments[2] ?? '') === 'allocate' && $method === 'POST') {
+                    $this->json(['data' => $this->allocations->allocate(
+                        $paymentId,
+                        (string) ($input['invoice_id'] ?? ''),
+                        $input
+                    )], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'allocations' && isset($segments[1])
+                && ($segments[2] ?? '') === 'reverse' && $method === 'POST') {
+                $this->json(['data' => $this->allocations->reverse(
+                    $segments[1],
+                    (string) ($input['reason'] ?? '')
+                )], 201);
+                return;
+            }
+
+            if ($segments === ['receivables', 'outstanding'] && $method === 'GET') {
+                $customerId = isset($_GET['customer_id']) && $_GET['customer_id'] !== ''
+                    ? (string) $_GET['customer_id']
+                    : null;
+                $this->json(['data' => $this->receivables->outstanding($customerId)]);
+                return;
+            }
+
+            if ($segments === ['receivables', 'ageing'] && $method === 'GET') {
+                $customerId = isset($_GET['customer_id']) && $_GET['customer_id'] !== ''
+                    ? (string) $_GET['customer_id']
+                    : null;
+                $this->json(['data' => $this->receivables->ageing($customerId)]);
+                return;
+            }
+
+            if ($segments === ['receivables', 'totals'] && $method === 'GET') {
+                $this->json(['data' => $this->receivables->totals()]);
+                return;
+            }
+
+            if (($segments[0] ?? '') === 'invoices' && isset($segments[1])
+                && ($segments[2] ?? '') === 'receivable' && $method === 'GET') {
+                $this->json(['data' => $this->receivables->invoiceSummary($segments[1])]);
+                return;
             }
 
             if ($segments === ['search'] && $method === 'GET') {
