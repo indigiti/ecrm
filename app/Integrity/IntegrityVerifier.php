@@ -4,12 +4,14 @@ declare(strict_types=1);
 namespace Ecrm\Integrity;
 
 use Ecrm\Storage\AtomicJsonStore;
+use Ecrm\Support\Runtime;
 
 final class IntegrityVerifier
 {
     public function __construct(
         private AtomicJsonStore $store,
-        private string $auditRoot
+        private string $auditRoot,
+        private ?string $uploadsRoot = null
     ) {}
 
     public function verify(): array
@@ -29,6 +31,7 @@ final class IntegrityVerifier
             'product_units' => $this->map('product_units'),
             'inventory_movements' => $this->map('inventory_movements'),
             'workshop_jobs' => $this->map('workshop_jobs'),
+            'documents' => $this->map('documents'),
             'quotations' => $this->map('quotations'),
             'invoices' => $this->map('invoices'),
             'payment_batches' => $this->map('payment_batches'),
@@ -54,6 +57,7 @@ final class IntegrityVerifier
         $productUnits = $collections['product_units'];
         $inventoryMovements = $collections['inventory_movements'];
         $workshopJobs = $collections['workshop_jobs'];
+        $documents = $collections['documents'];
         $quotations = $collections['quotations'];
         $invoices = $collections['invoices'];
         $paymentBatches = $collections['payment_batches'];
@@ -577,6 +581,58 @@ final class IntegrityVerifier
             } else {
                 if (!empty($row['check_in_movement_id']) || !empty($row['check_out_movement_id'])) {
                     $errors[] = "workshop_jobs: {$id} customer asset must not use company inventory movements";
+                }
+            }
+        }
+
+        $uploadsRoot = $this->uploadsRoot ?: Runtime::uploadsRoot();
+        $entityCollections = [
+            'customer' => $customers,
+            'product' => $products,
+            'location' => $locations,
+            'product_unit' => $productUnits,
+            'workshop_job' => $workshopJobs,
+            'quotation' => $quotations,
+            'invoice' => $invoices,
+            'payment' => $payments,
+        ];
+
+        foreach ($documents as $id => $row) {
+            $relative = trim((string) ($row['relative_path'] ?? ''));
+            if ($relative === '' || str_contains($relative, '..') || str_starts_with($relative, '/')) {
+                $errors[] = "documents: {$id} has invalid storage path";
+                continue;
+            }
+
+            $path = rtrim($uploadsRoot, '/') . '/' . $relative;
+            if (!is_file($path)) {
+                $errors[] = "documents: {$id} file is missing";
+            } else {
+                $size = filesize($path);
+                if ($size !== false && (int) ($row['size_bytes'] ?? -1) !== $size) {
+                    $errors[] = "documents: {$id} size does not match stored file";
+                }
+                $hash = hash_file('sha256', $path);
+                if (!is_string($hash) || !hash_equals((string) ($row['sha256'] ?? ''), $hash)) {
+                    $errors[] = "documents: {$id} checksum mismatch";
+                }
+            }
+
+            if (!in_array($row['status'] ?? '', ['active','archived'], true)) {
+                $errors[] = "documents: {$id} has invalid status";
+            }
+            if (trim((string) ($row['title'] ?? '')) === '') {
+                $errors[] = "documents: {$id} has no title";
+            }
+            if (trim((string) ($row['original_name'] ?? '')) === '') {
+                $errors[] = "documents: {$id} has no original filename";
+            }
+
+            $entityType = (string) ($row['entity_type'] ?? 'general');
+            $entityId = $row['entity_id'] ?? null;
+            if ($entityType !== 'general' && $entityType !== 'settings' && $entityId) {
+                if (isset($entityCollections[$entityType]) && !isset($entityCollections[$entityType][(string) $entityId])) {
+                    $errors[] = "documents: {$id} references missing {$entityType} {$entityId}";
                 }
             }
         }
