@@ -17,7 +17,6 @@ use Ecrm\Search\SearchIndex;
 use Ecrm\Search\SearchRebuilder;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\Sequence;
-use InvalidArgumentException;
 
 function expectOperations(bool $condition, string $message): void
 {
