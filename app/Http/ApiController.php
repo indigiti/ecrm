@@ -151,6 +151,13 @@ final class ApiController
                     return;
                 }
                 $this->auth->login((string) $user['id']);
+                $this->audit->setActor([
+                    'id' => $user['id'],
+                    'name' => $user['name'],
+                    'email' => $user['email'],
+                    'role' => $user['role'],
+                ]);
+                $this->audit->append('auth.login', 'user', (string) $user['id']);
                 $this->json([
                     'data' => $user,
                     'csrf_token' => $this->auth->csrfToken(),
@@ -182,11 +189,6 @@ final class ApiController
                 return;
             }
 
-            if (($currentUser['role'] ?? '') === 'read_only' && !in_array($method, ['GET','HEAD','OPTIONS'], true)) {
-                $this->json(['error' => 'Read-only user cannot modify data'], 403);
-                return;
-            }
-
             if ($segments === ['auth', 'me'] && $method === 'GET') {
                 $this->json([
                     'data' => $currentUser,
@@ -196,6 +198,7 @@ final class ApiController
             }
 
             if ($segments === ['auth', 'logout'] && $method === 'POST') {
+                $this->audit->append('auth.logout', 'user', (string) $currentUser['id']);
                 $this->auth->logout();
                 $this->json(['status' => 'ok']);
                 return;
@@ -215,6 +218,11 @@ final class ApiController
                     (string) ($input['new_password'] ?? '')
                 );
                 $this->json(['data' => $user]);
+                return;
+            }
+
+            if (($currentUser['role'] ?? '') === 'read_only' && !in_array($method, ['GET','HEAD','OPTIONS'], true)) {
+                $this->json(['error' => 'Read-only user cannot modify data'], 403);
                 return;
             }
 
