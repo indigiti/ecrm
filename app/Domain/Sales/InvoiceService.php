@@ -33,7 +33,7 @@ final class InvoiceService
         );
 
         return $this->persistNew([
-            'quotation_id' => $input['quotation_id'] ?? null,
+            'quotation_id' => null,
             'customer' => $customer,
             'address' => $address,
             'calculated' => $calculated,
