@@ -25,6 +25,49 @@ final class ReceivablesService
         $allocated = $this->allocations->netForInvoice($invoiceId);
         $outstanding = max(0, $total - $allocated);
 
+        $paymentRows = [];
+        $allocationHistory = $this->allocations->forInvoice($invoiceId);
+        foreach ($allocationHistory as $allocation) {
+            $paymentId = (string) ($allocation['payment_id'] ?? '');
+            if ($paymentId === '') continue;
+
+            $paymentRows[$paymentId] ??= [
+                'payment_id' => $paymentId,
+                'payment_number' => '',
+                'received_at' => null,
+                'method' => '',
+                'reference' => '',
+                'payment_amount_paise' => 0,
+                'allocated_paise' => 0,
+                'status' => '',
+            ];
+
+            $paymentRows[$paymentId]['allocated_paise'] += (int) ($allocation['amount_paise'] ?? 0);
+        }
+
+        foreach ($paymentRows as $paymentId => &$row) {
+            $payment = $this->store->get('payments', $paymentId);
+            if (!$payment) continue;
+
+            $row['payment_number'] = $payment['number'] ?? '';
+            $row['received_at'] = $payment['received_at'] ?? $payment['created_at'] ?? null;
+            $row['method'] = $payment['method'] ?? '';
+            $row['reference'] = $payment['reference'] ?? '';
+            $row['payment_amount_paise'] = (int) ($payment['amount_paise'] ?? 0);
+            $row['status'] = $payment['status'] ?? '';
+        }
+        unset($row);
+
+        $paymentRows = array_values(array_filter(
+            $paymentRows,
+            static fn(array $row): bool => (int) ($row['allocated_paise'] ?? 0) > 0
+        ));
+
+        usort($paymentRows, static fn(array $a, array $b): int =>
+            strcmp((string) ($a['received_at'] ?? ''), (string) ($b['received_at'] ?? ''))
+            ?: strcmp((string) ($a['payment_number'] ?? ''), (string) ($b['payment_number'] ?? ''))
+        );
+
         return [
             'invoice_id' => $invoiceId,
             'number' => $invoice['number'] ?? '',
@@ -33,7 +76,12 @@ final class ReceivablesService
             'due_date' => $invoice['due_date'] ?? null,
             'total_paise' => $total,
             'allocated_paise' => $allocated,
+            'paid_paise' => $allocated,
             'outstanding_paise' => $outstanding,
+            'pending_paise' => $outstanding,
+            'payment_count' => count($paymentRows),
+            'last_payment_at' => $paymentRows !== [] ? ($paymentRows[array_key_last($paymentRows)]['received_at'] ?? null) : null,
+            'payments' => $paymentRows,
             'ageing_bucket' => $this->ageingBucket($invoice['due_date'] ?? null, $outstanding),
         ];
     }
