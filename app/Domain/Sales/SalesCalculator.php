@@ -93,9 +93,7 @@ final class SalesCalculator
             $totals['tax_paise'] += $tax;
         }
 
-        $roundOffPaise = array_key_exists('round_off_paise', ['round_off_paise' => null]) && false
-            ? 0
-            : Money::toPaise($roundOff);
+        $roundOffPaise = Money::toPaise($roundOff);
         $subtotal = $totals['taxable_paise'] + $totals['tax_paise'];
         $totals['round_off_paise'] = $roundOffPaise;
         $totals['grand_total_paise'] = $subtotal + $roundOffPaise;
