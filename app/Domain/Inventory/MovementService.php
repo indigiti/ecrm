@@ -126,13 +126,6 @@ final class MovementService
             throw new InvalidArgumentException('Source and destination locations must be different');
         }
 
-        if ($from !== null) {
-            $available = $this->balanceMilli($productId, $from);
-            if ($available < $quantityMilli) {
-                throw new InvalidArgumentException('Insufficient stock at source location');
-            }
-        }
-
         $unitId = trim((string) ($input['product_unit_id'] ?? ''));
         $serialized = (bool) ($product['serial_tracking'] ?? false);
 
@@ -164,6 +157,13 @@ final class MovementService
             }
             if ($from === null && $currentLocation !== null) {
                 throw new InvalidArgumentException('Serialized unit is already in stock');
+            }
+        }
+
+        if ($from !== null) {
+            $available = $this->balanceMilli($productId, $from);
+            if ($available < $quantityMilli) {
+                throw new InvalidArgumentException('Insufficient stock at source location');
             }
         }
 
