@@ -683,6 +683,253 @@ async function salesDocumentModal(kind, record) {
   } catch(e) { toast(e.message,true); }
 }
 
+async function paymentsWorkspace(w) {
+  const tab = state.financeTab || 'receipts';
+  const tabs = [
+    ['receipts','Receipts'],
+    ['outstanding','Outstanding'],
+    ['ageing','Ageing'],
+    ['batches','Batches']
+  ];
+
+  w.innerHTML =
+    '<section class="page-head"><div><p class="eyebrow">FINANCE</p><h1>Payments & Receivables</h1><p>Independent receipts, invoice allocations, outstanding balances and ageing.</p></div><div class="record-actions"><button class="soft" id="new-batch">+ Batch</button><button class="primary" id="new-payment">+ Payment</button></div></section>' +
+    '<div class="finance-tabs">' + tabs.map(function(item){ return '<button data-finance-tab="' + item[0] + '" class="' + (item[0] === tab ? 'active' : '') + '">' + item[1] + '</button>'; }).join('') + '</div>' +
+    '<div id="finance-content"><div class="loading">Loading finance…</div></div>';
+
+  w.querySelectorAll('[data-finance-tab]').forEach(function(btn){
+    btn.onclick = function(){ state.financeTab = btn.dataset.financeTab; paymentsWorkspace(w); };
+  });
+  document.querySelector('#new-payment').onclick = function(){ paymentModal(); };
+  document.querySelector('#new-batch').onclick = function(){ paymentBatchModal(); };
+
+  const content = document.querySelector('#finance-content');
+
+  try {
+    if (tab === 'receipts') {
+      const results = await Promise.all([api('payments'), api('receivables/totals')]);
+      const payments = results[0].data;
+      const totals = results[1].data;
+      const body = payments.length ? payments.map(function(p){
+        return '<button class="finance-row" data-open-payment="' + esc(p.id) + '"><span><b>' + esc(p.number) + '</b><small>' + esc(p.received_at ? new Date(p.received_at).toLocaleDateString() : '') + '</small></span><span><b>' + esc(paymentMethodLabel(p.method)) + '</b><small>' + esc(p.reference || 'No reference') + '</small></span><span><b>' + moneyPaise(p.amount_paise) + '</b><small>' + esc(p.status) + '</small></span></button>';
+      }).join('') : '<div class="empty-state"><b>No receipts yet</b><span>Record the first payment without mutating invoice history.</span></div>';
+
+      content.innerHTML =
+        '<section class="metrics finance-metrics">' +
+          metric('Collected', moneyPaise(totals.collected_paise), 'Posted receipts') +
+          metric('Outstanding', moneyPaise(totals.outstanding_paise), 'Invoice allocation balance') +
+          metric('Overdue', moneyPaise(totals.overdue_paise), 'Past due') +
+          metric('Unallocated credit', moneyPaise(totals.unallocated_credit_paise), 'Available to allocate') +
+        '</section>' +
+        '<article class="table-card finance-card"><div class="finance-head"><span>Receipt</span><span>Method / Reference</span><span>Amount / Status</span></div>' + body + '</article>';
+
+      content.querySelectorAll('[data-open-payment]').forEach(function(btn){ btn.onclick = function(){ openPayment(btn.dataset.openPayment); }; });
+      return;
+    }
+
+    if (tab === 'outstanding') {
+      const payload = await api('receivables/outstanding');
+      const rows = payload.data;
+      const body = rows.length ? rows.map(function(row){
+        return '<button class="finance-row four" data-finance-invoice="' + esc(row.invoice_id) + '"><span><b>' + esc(row.number) + '</b><small>' + esc(row.customer_name || '') + '</small></span><span><b>' + moneyPaise(row.outstanding_paise) + '</b><small>of ' + moneyPaise(row.total_paise) + '</small></span><span><b>' + esc(row.due_date || 'No due date') + '</b><small>' + esc(ageingLabel(row.ageing_bucket)) + '</small></span><span><i class="pill">' + esc(row.status) + '</i></span></button>';
+      }).join('') : '<div class="empty-state"><b>No outstanding invoices</b><span>Issued invoices with unpaid balances will appear here.</span></div>';
+
+      content.innerHTML = '<article class="table-card finance-card"><div class="finance-head four"><span>Invoice / Customer</span><span>Outstanding</span><span>Due / Ageing</span><span>Status</span></div>' + body + '</article>';
+      content.querySelectorAll('[data-finance-invoice]').forEach(function(btn){ btn.onclick = function(){ openInvoice(btn.dataset.financeInvoice); }; });
+      return;
+    }
+
+    if (tab === 'ageing') {
+      const payload = await api('receivables/ageing');
+      const data = payload.data;
+      const keys = ['current','1_30','31_60','61_90','90_plus'];
+      content.innerHTML =
+        '<section class="metrics finance-metrics">' + keys.map(function(key){
+          const bucket = data.buckets[key];
+          return metric(bucket.label, moneyPaise(bucket.amount_paise), bucket.count + ' invoice' + (bucket.count === 1 ? '' : 's'));
+        }).join('') + '</section>' +
+        '<article class="panel ageing-panel"><div class="row"><div><p class="eyebrow">AGEING DETAIL</p><h2>' + moneyPaise(data.total_outstanding_paise) + ' outstanding</h2></div><span class="pill">As of ' + esc(data.as_of) + '</span></div>' +
+        keys.map(function(key){
+          const bucket = data.buckets[key];
+          if (!bucket.invoices.length) return '';
+          return '<section class="ageing-group"><div class="attention-title"><b>' + esc(bucket.label) + '</b><span>' + bucket.count + '</span></div>' + bucket.invoices.map(function(row){
+            return '<button data-finance-invoice="' + esc(row.invoice_id) + '"><span><b>' + esc(row.number) + '</b><small>' + esc(row.customer_name || '') + '</small></span><strong>' + moneyPaise(row.outstanding_paise) + '</strong></button>';
+          }).join('') + '</section>';
+        }).join('') + '</article>';
+
+      content.querySelectorAll('[data-finance-invoice]').forEach(function(btn){ btn.onclick = function(){ openInvoice(btn.dataset.financeInvoice); }; });
+      return;
+    }
+
+    if (tab === 'batches') {
+      const payload = await api('payment-batches');
+      const rows = payload.data;
+      const body = rows.length ? rows.map(function(batch){
+        return '<div class="batch-row"><span><b>' + esc(batch.number) + '</b><small>' + esc(batch.title) + ' · ' + esc(batch.batch_date) + '</small></span><span><i class="pill">' + esc(batch.status) + '</i></span>' + (batch.status === 'open' ? '<button class="soft" data-close-batch="' + esc(batch.id) + '">Close</button>' : '<span></span>') + '</div>';
+      }).join('') : '<div class="empty-state"><b>No payment batches</b><span>Batches can group bank or counter receipts without changing individual payment identity.</span></div>';
+
+      content.innerHTML = '<article class="panel"><p class="eyebrow">PAYMENT BATCHES</p><div class="batch-list">' + body + '</div></article>';
+      content.querySelectorAll('[data-close-batch]').forEach(function(btn){
+        btn.onclick = async function(){
+          try { await api('payment-batches/' + btn.dataset.closeBatch + '/close',{method:'POST'}); toast('Batch closed'); paymentsWorkspace(w); }
+          catch(e) { toast(e.message,true); }
+        };
+      });
+    }
+  } catch(e) {
+    content.innerHTML = errorCard(e.message);
+  }
+}
+
+async function openPayment(id) {
+  state.view = 'payments';
+  const w = document.querySelector('#workspace');
+  w.innerHTML = '<div class="loading">Loading receipt…</div>';
+
+  try {
+    const detailPayload = await api('payments/' + id);
+    const detail = detailPayload.data;
+    const payment = detail.payment;
+    const results = await Promise.all([
+      api('receivables/outstanding?customer_id=' + encodeURIComponent(payment.customer_id)),
+      api('customers/' + payment.customer_id + '/overview')
+    ]);
+    const outstanding = results[0].data;
+    const invoices = results[1].data.invoices || [];
+    const invoiceMap = {};
+    invoices.forEach(function(inv){ invoiceMap[inv.id] = inv; });
+
+    const reversed = new Set(detail.allocations.filter(function(a){ return a.type === 'reversal' && a.reversal_of; }).map(function(a){ return a.reversal_of; }));
+    const ledger = detail.allocations.length ? detail.allocations.map(function(a){
+      const inv = invoiceMap[a.invoice_id];
+      const reversible = a.type === 'allocation' && !reversed.has(a.id);
+      return '<div class="allocation-row ' + (a.type === 'reversal' ? 'reversal' : '') + '"><span><b>' + esc(inv ? inv.number : a.invoice_id) + '</b><small>' + esc(a.type) + (a.reason ? ' · ' + esc(a.reason) : '') + '</small></span><strong>' + moneyPaise(a.amount_paise) + '</strong>' + (reversible ? '<button class="soft" data-reverse-allocation="' + esc(a.id) + '">Reverse</button>' : '<span></span>') + '</div>';
+    }).join('') : '<div class="empty-small">No allocations yet.</div>';
+
+    const allocatable = outstanding.length && detail.available_paise > 0 ? outstanding.map(function(row){
+      return '<div class="allocation-target"><span><b>' + esc(row.number) + '</b><small>' + esc(row.due_date || 'No due date') + ' · ' + esc(ageingLabel(row.ageing_bucket)) + '</small></span><strong>' + moneyPaise(row.outstanding_paise) + '</strong><button class="soft" data-allocate-invoice="' + esc(row.invoice_id) + '">Allocate</button></div>';
+    }).join('') : '<div class="empty-small">No eligible outstanding invoices or no unallocated balance.</div>';
+
+    w.innerHTML =
+      '<button class="back" id="back-payments">← Payments</button>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(payment.number) + '</p><h1>' + moneyPaise(payment.amount_paise) + '</h1><p>' + esc(paymentMethodLabel(payment.method)) + (payment.reference ? ' · ' + esc(payment.reference) : '') + ' · ' + esc(payment.status) + '</p></div><div class="record-actions"><button class="soft" id="print-receipt">Print Receipt</button>' + (payment.status === 'posted' && detail.allocated_paise === 0 ? '<button class="soft" id="void-payment">Void</button>' : '') + '</div></section>' +
+      '<section class="metrics finance-metrics">' +
+        metric('Receipt amount', moneyPaise(payment.amount_paise), 'Posted transaction') +
+        metric('Allocated', moneyPaise(detail.allocated_paise), 'Across invoices') +
+        metric('Available', moneyPaise(detail.available_paise), 'Unallocated credit') +
+      '</section>' +
+      '<section class="dash-grid finance-detail-grid"><article class="panel"><p class="eyebrow">ALLOCATION LEDGER</p><div class="allocation-list">' + ledger + '</div></article><article class="panel"><p class="eyebrow">ALLOCATE TO INVOICES</p><div class="allocation-list">' + allocatable + '</div></article></section>';
+
+    document.querySelector('#back-payments').onclick = function(){ state.financeTab = 'receipts'; paymentsWorkspace(w); };
+    document.querySelector('#print-receipt').onclick = function(){ window.print(); };
+    const voidButton = document.querySelector('#void-payment');
+    if (voidButton) voidButton.onclick = function(){ paymentVoidModal(payment); };
+
+    w.querySelectorAll('[data-allocate-invoice]').forEach(function(btn){
+      btn.onclick = function(){
+        const row = outstanding.find(function(x){ return x.invoice_id === btn.dataset.allocateInvoice; });
+        if (row) allocationModal(payment, detail.available_paise, row);
+      };
+    });
+    w.querySelectorAll('[data-reverse-allocation]').forEach(function(btn){
+      btn.onclick = function(){ reverseAllocationModal(payment.id, btn.dataset.reverseAllocation); };
+    });
+  } catch(e) {
+    w.innerHTML = errorCard(e.message);
+  }
+}
+
+function paymentMethodLabel(method) {
+  return String(method || '').replaceAll('_',' ').replace(/\b\w/g, function(c){ return c.toUpperCase(); });
+}
+
+function ageingLabel(key) {
+  return ({current:'Current','1_30':'1–30','31_60':'31–60','61_90':'61–90','90_plus':'90+'})[key] || key || '';
+}
+
+async function paymentModal(customerId, batchId) {
+  customerId = customerId || '';
+  batchId = batchId || '';
+
+  try {
+    const results = await Promise.all([api('customers'), api('payment-batches')]);
+    const customers = results[0].data;
+    const batches = results[1].data.filter(function(b){ return b.status === 'open'; });
+
+    if (!customers.length) { toast('Create a customer before recording a payment', true); return; }
+
+    const customerOptions = customers.map(function(c){ return '<option value="' + esc(c.id) + '"' + (c.id === customerId ? ' selected' : '') + '>' + esc(c.name) + ' · ' + esc(c.number) + '</option>'; }).join('');
+    const batchOptions = '<option value="">No batch</option>' + batches.map(function(b){ return '<option value="' + esc(b.id) + '"' + (b.id === batchId ? ' selected' : '') + '>' + esc(b.number) + ' · ' + esc(b.title) + '</option>'; }).join('');
+
+    modal('Record payment',
+      '<label class="full">Customer<select required name="customer_id"><option value="">Select customer</option>' + customerOptions + '</select></label>' +
+      '<label>Amount<input required name="amount" type="number" min="0.01" step="0.01"></label><label>Method<select required name="method"><option value="cash">Cash</option><option value="upi">UPI</option><option value="neft">NEFT</option><option value="rtgs">RTGS</option><option value="imps">IMPS</option><option value="cheque">Cheque</option><option value="card">Card</option><option value="bank_transfer">Bank Transfer</option><option value="credit_note">Credit Note</option><option value="other">Other</option></select></label>' +
+      '<label>Reference / UTR<input name="reference"></label><label>Batch<select name="batch_id">' + batchOptions + '</select></label>' +
+      '<label>Bank<input name="bank"></label><label>UPI reference<input name="upi_ref"></label><label>Cheque number<input name="cheque_no"></label><label>Cheque date<input name="cheque_date" type="date"></label>' +
+      '<label class="full">Notes<textarea name="notes"></textarea></label>',
+      async function(payload){
+        payload.method_meta = {
+          bank: payload.bank || '',
+          upi_ref: payload.upi_ref || '',
+          cheque_no: payload.cheque_no || '',
+          cheque_date: payload.cheque_date || ''
+        };
+        delete payload.bank; delete payload.upi_ref; delete payload.cheque_no; delete payload.cheque_date;
+        const result = await api('payments',{method:'POST',body:payload});
+        return function(){ openPayment(result.data.id); };
+      }
+    );
+  } catch(e) { toast(e.message,true); }
+}
+
+async function paymentBatchModal() {
+  try {
+    const customers = (await api('customers')).data;
+    const options = '<option value="">Any customer</option>' + customers.map(function(c){ return '<option value="' + esc(c.id) + '">' + esc(c.name) + '</option>'; }).join('');
+
+    modal('New payment batch',
+      '<label class="full">Title<input required name="title" value="Payment Batch"></label><label>Customer<select name="customer_id">' + options + '</select></label><label>Batch date<input name="batch_date" type="date"></label><label class="full">Notes<textarea name="notes"></textarea></label>',
+      async function(payload){
+        const result = await api('payment-batches',{method:'POST',body:payload});
+        state.financeTab = 'batches';
+        return function(){ paymentsWorkspace(document.querySelector('#workspace')); };
+      }
+    );
+  } catch(e) { toast(e.message,true); }
+}
+
+function allocationModal(payment, availablePaise, invoice) {
+  const max = Math.min(Number(availablePaise || 0), Number(invoice.outstanding_paise || 0));
+  modal('Allocate payment',
+    '<div class="full allocation-callout"><b>' + esc(invoice.number) + '</b><span>Outstanding ' + moneyPaise(invoice.outstanding_paise) + ' · Receipt available ' + moneyPaise(availablePaise) + '</span></div>' +
+    '<input type="hidden" name="invoice_id" value="' + esc(invoice.invoice_id) + '"><label class="full">Amount<input required name="amount" type="number" min="0.01" max="' + (max / 100).toFixed(2) + '" step="0.01" value="' + (max / 100).toFixed(2) + '"></label>',
+    async function(payload){
+      await api('payments/' + payment.id + '/allocate',{method:'POST',body:payload});
+      return function(){ openPayment(payment.id); };
+    }
+  );
+}
+
+function reverseAllocationModal(paymentId, allocationId) {
+  modal('Reverse allocation',
+    '<label class="full">Reason<textarea required name="reason" placeholder="Reason is appended to the Finance ledger"></textarea></label>',
+    async function(payload){
+      await api('allocations/' + allocationId + '/reverse',{method:'POST',body:payload});
+      return function(){ openPayment(paymentId); };
+    }
+  );
+}
+
+function paymentVoidModal(payment) {
+  modal('Void payment',
+    '<label class="full">Reason<textarea required name="reason" placeholder="Void reason is permanent in the audit ledger"></textarea></label>',
+    async function(payload){
+      await api('payments/' + payment.id + '/void',{method:'POST',body:payload});
+      return function(){ openPayment(payment.id); };
+    }
+  );
+}
+
 function comingSoon(w) {
   const item = nav.find(function(n){ return n[0] === state.view; });
   const label = item ? item[1] : 'Module';
