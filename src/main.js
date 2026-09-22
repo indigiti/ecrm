@@ -1761,8 +1761,10 @@ function archiveDocumentModal(id) {
 
 async function settingsWorkspace(w) {
   const tab = state.settingsTab || 'company';
-  const tabs = [['company','Company'],['account','My Account']];
-  if (state.currentUser && state.currentUser.role === 'admin') tabs.splice(1,0,['users','Users']);
+  const tabs = [['company','Company']];
+  if (state.currentUser && state.currentUser.role === 'admin') tabs.push(['users','Users']);
+  if (state.currentUser && ['admin','manager'].includes(state.currentUser.role)) tabs.push(['system','System']);
+  tabs.push(['account','My Account']);
 
   w.innerHTML =
     '<section class="page-head"><div><p class="eyebrow">ADMINISTRATION</p><h1>Settings</h1><p>Company identity, billing defaults, users and account security.</p></div></section>' +
@@ -1774,6 +1776,7 @@ async function settingsWorkspace(w) {
 
   if (tab === 'company') return companySettings(document.querySelector('#settings-content'));
   if (tab === 'users') return usersSettings(document.querySelector('#settings-content'));
+  if (tab === 'system') return systemSettings(document.querySelector('#settings-content'));
   return accountSettings(document.querySelector('#settings-content'));
 }
 
@@ -1880,6 +1883,53 @@ function resetUserPasswordModal(id) {
       return function(){ state.settingsTab='users'; settingsWorkspace(document.querySelector('#workspace')); };
     }
   );
+}
+
+
+async function systemSettings(root) {
+  if (!state.currentUser || !['admin','manager'].includes(state.currentUser.role)) {
+    root.innerHTML = errorCard('Admin or Manager access is required.');
+    return;
+  }
+
+  try {
+    const rows = (await api('backups')).data;
+    const body = rows.length ? rows.map(function(row){
+      return '<div class="backup-row"><span><b>' + esc(row.id) + '</b><small>' + esc(row.created_at ? new Date(row.created_at).toLocaleString() : '') + '</small></span><span><b>' + esc(row.file_count) + ' files</b><small>' + esc(formatBytes(row.total_bytes)) + '</small></span><button class="soft" data-verify-backup="' + esc(row.id) + '">Verify</button></div>';
+    }).join('') : '<div class="empty-small">No application snapshots yet.</div>';
+
+    root.innerHTML =
+      '<article class="panel"><div class="settings-section-head"><div><p class="eyebrow">BACKUP & INTEGRITY</p><h2>Private Runtime Snapshots</h2><p>Snapshots cover business data, search indexes, documents, audit, users/config and job state. Sessions and locks are excluded.</p></div><button class="primary" id="backup-now">Backup Now</button></div>' +
+      '<div class="backup-list">' + body + '</div><div id="backup-result" class="backup-result"></div></article>';
+
+    document.querySelector('#backup-now').onclick = async function(){
+      const button = this;
+      button.disabled = true;
+      button.textContent = 'Creating…';
+      try {
+        const result = (await api('backups',{method:'POST'})).data;
+        toast('Backup created: ' + result.id);
+        systemSettings(root);
+      } catch(e) {
+        toast(e.message,true);
+        button.disabled = false;
+        button.textContent = 'Backup Now';
+      }
+    };
+
+    root.querySelectorAll('[data-verify-backup]').forEach(function(btn){
+      btn.onclick = async function(){
+        const resultBox = document.querySelector('#backup-result');
+        resultBox.innerHTML = '<div class="loading">Verifying snapshot…</div>';
+        try {
+          const result = (await api('backups/' + encodeURIComponent(btn.dataset.verifyBackup) + '/verify',{method:'POST'})).data;
+          resultBox.innerHTML = '<div class="backup-verification ' + (result.ok ? 'ok' : 'bad') + '"><b>' + (result.ok ? 'Verification passed' : 'Verification failed') + '</b><span>' + esc(result.checked_files) + ' files · ' + esc(formatBytes(result.checked_bytes)) + (result.errors.length ? ' · ' + esc(result.errors.join('; ')) : '') + '</span></div>';
+        } catch(e) {
+          resultBox.innerHTML = errorCard(e.message);
+        }
+      };
+    });
+  } catch(e) { root.innerHTML = errorCard(e.message); }
 }
 
 function accountSettings(root) {
