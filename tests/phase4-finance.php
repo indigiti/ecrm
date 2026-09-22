@@ -6,8 +6,6 @@ mkdir($root, 0770, true);
 define('ECRM_PRIVATE_ROOT', $root);
 require dirname(__DIR__) . '/app/bootstrap.php';
 
-use DateTimeImmutable;
-use DateTimeZone;
 use Ecrm\Audit\AuditLedger;
 use Ecrm\Domain\Customers\CustomerService;
 use Ecrm\Domain\Finance\AllocationService;
@@ -21,7 +19,6 @@ use Ecrm\Search\SearchIndex;
 use Ecrm\Search\SearchRebuilder;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\Sequence;
-use InvalidArgumentException;
 
 function expectFinance(bool $condition, string $message): void
 {
