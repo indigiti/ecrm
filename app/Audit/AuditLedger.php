@@ -8,7 +8,14 @@ use RuntimeException;
 
 final class AuditLedger
 {
+    private ?array $actor = null;
+
     public function __construct(private string $root) {}
+
+    public function setActor(?array $actor): void
+    {
+        $this->actor = $actor;
+    }
 
     public function append(string $action, string $entityType, string $entityId, array $context = []): void
     {
@@ -37,6 +44,7 @@ final class AuditLedger
                 'entity_type' => $entityType,
                 'entity_id' => $entityId,
                 'context' => $context,
+                'actor' => $this->actor,
                 'previous_hash' => $previousHash,
             ];
             $event['hash'] = hash('sha256', json_encode($event, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
