@@ -344,14 +344,20 @@ final class IntegrityVerifier
             'workshop_in','workshop_out','adjustment','damaged','lost','scrap','reversal'
         ];
         $movementReversals = [];
+        $ledgerSeqSeen = [];
         $stock = [];
         $unitLocation = [];
 
         $orderedMovements = array_values($inventoryMovements);
-        usort($orderedMovements, static fn(array $a, array $b): int =>
-            strcmp((string) ($a['created_at'] ?? ''), (string) ($b['created_at'] ?? ''))
-            ?: strcmp((string) ($a['id'] ?? ''), (string) ($b['id'] ?? ''))
-        );
+        usort($orderedMovements, static function(array $a, array $b): int {
+            $aSeq = (int) ($a['ledger_seq'] ?? 0);
+            $bSeq = (int) ($b['ledger_seq'] ?? 0);
+            if ($aSeq > 0 && $bSeq > 0 && $aSeq !== $bSeq) {
+                return $aSeq <=> $bSeq;
+            }
+            return strcmp((string) ($a['created_at'] ?? ''), (string) ($b['created_at'] ?? ''))
+                ?: strcmp((string) ($a['id'] ?? ''), (string) ($b['id'] ?? ''));
+        });
 
         foreach ($orderedMovements as $row) {
             $id = (string) ($row['id'] ?? '');
@@ -360,6 +366,15 @@ final class IntegrityVerifier
             $to = $row['to_location_id'] ?? null;
             $quantity = (int) ($row['quantity_milli'] ?? 0);
             $type = (string) ($row['type'] ?? '');
+            $ledgerSeq = (int) ($row['ledger_seq'] ?? 0);
+
+            if ($ledgerSeq <= 0) {
+                $warnings[] = "inventory_movements: {$id} has no ledger sequence";
+            } elseif (isset($ledgerSeqSeen[$ledgerSeq])) {
+                $errors[] = "inventory_movements: duplicate ledger sequence {$ledgerSeq}";
+            } else {
+                $ledgerSeqSeen[$ledgerSeq] = true;
+            }
 
             if ($productId === '' || !isset($products[$productId])) {
                 $errors[] = "inventory_movements: {$id} references missing product {$productId}";
