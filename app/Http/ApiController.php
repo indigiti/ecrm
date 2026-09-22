@@ -11,6 +11,10 @@ use Ecrm\Domain\CRM\LeadService;
 use Ecrm\Domain\Customers\AddressService;
 use Ecrm\Domain\Customers\ContactService;
 use Ecrm\Domain\Customers\CustomerService;
+use Ecrm\Domain\Products\ProductService;
+use Ecrm\Domain\Sales\InvoiceService;
+use Ecrm\Domain\Sales\QuotationService;
+use Ecrm\Domain\Sales\SalesCalculator;
 use Ecrm\Search\SearchIndex;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\Runtime;
@@ -27,6 +31,9 @@ final class ApiController
     private LeadService $leads;
     private LeadConversionService $leadConversion;
     private ActivityService $activities;
+    private ProductService $products;
+    private QuotationService $quotations;
+    private InvoiceService $invoices;
     private SearchIndex $search;
 
     public function __construct()
@@ -36,6 +43,7 @@ final class ApiController
         $audit = new AuditLedger(Runtime::auditRoot());
         $sequence = new Sequence(Runtime::dataRoot() . '/sequences');
         $geocoding = new GeocodingQueue(Runtime::jobsRoot());
+        $calculator = new SalesCalculator();
 
         $this->customers = new CustomerService($this->store, $sequence, $this->search, $audit);
         $this->contacts = new ContactService($this->store, $this->search, $audit);
@@ -43,6 +51,9 @@ final class ApiController
         $this->leads = new LeadService($this->store, $sequence, $this->search, $audit);
         $this->leadConversion = new LeadConversionService($this->leads, $this->customers);
         $this->activities = new ActivityService($this->store, $audit);
+        $this->products = new ProductService($this->store, $sequence, $this->search, $audit);
+        $this->quotations = new QuotationService($this->store, $sequence, $this->search, $audit, $calculator);
+        $this->invoices = new InvoiceService($this->store, $sequence, $this->search, $audit, $calculator);
     }
 
     public function handle(): void
@@ -68,6 +79,14 @@ final class ApiController
                     $this->leads->all(),
                     static fn(array $lead): bool => !in_array($lead['stage'] ?? '', ['won', 'lost'], true)
                 );
+                $quotesAwaiting = array_filter(
+                    $this->quotations->all(),
+                    static fn(array $quote): bool => in_array($quote['status'] ?? '', ['sent','viewed','revised'], true)
+                );
+                $issuedInvoices = array_filter(
+                    $this->invoices->all(),
+                    static fn(array $invoice): bool => in_array($invoice['status'] ?? '', ['issued','partially_paid'], true)
+                );
 
                 $this->json([
                     'customers' => count($this->customers->all()),
@@ -76,6 +95,8 @@ final class ApiController
                     'overdue_followups' => count($attention['overdue']),
                     'due_today' => count($attention['today']),
                     'mapped_addresses' => count($this->addresses->mapped()),
+                    'quotes_awaiting' => count($quotesAwaiting),
+                    'issued_invoices' => count($issuedInvoices),
                     'recent_activity' => array_slice($activities, 0, 8),
                 ]);
                 return;
@@ -108,6 +129,8 @@ final class ApiController
                         'contacts' => $this->contacts->forCustomer($id),
                         'addresses' => $this->addresses->forCustomer($id),
                         'activities' => $this->activities->all($id),
+                        'quotations' => array_values(array_filter($this->quotations->all(), static fn(array $q): bool => ($q['customer_id'] ?? null) === $id)),
+                        'invoices' => array_values(array_filter($this->invoices->all(), static fn(array $i): bool => ($i['customer_id'] ?? null) === $id)),
                     ]]);
                     return;
                 }
@@ -178,6 +201,90 @@ final class ApiController
                 return;
             }
 
+            if ($segments === ['products']) {
+                if ($method === 'GET') {
+                    $this->json(['data' => $this->products->all()]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->products->create($input)], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'products' && isset($segments[1]) && count($segments) === 2) {
+                if ($method === 'GET') {
+                    $this->json(['data' => $this->products->get($segments[1])]);
+                    return;
+                }
+                if (in_array($method, ['PUT','PATCH'], true)) {
+                    $this->json(['data' => $this->products->update($segments[1], $input)]);
+                    return;
+                }
+            }
+
+            if ($segments === ['quotations']) {
+                if ($method === 'GET') {
+                    $this->json(['data' => $this->quotations->all(), 'statuses' => QuotationService::STATUSES]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->quotations->create($input)], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'quotations' && isset($segments[1])) {
+                $id = $segments[1];
+                if (count($segments) === 2 && $method === 'GET') {
+                    $this->json(['data' => $this->quotations->get($id)]);
+                    return;
+                }
+                if (count($segments) === 2 && in_array($method, ['PUT','PATCH'], true)) {
+                    $this->json(['data' => $this->quotations->update($id, $input)]);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'status' && in_array($method, ['PUT','PATCH'], true)) {
+                    $this->json(['data' => $this->quotations->changeStatus($id, (string) ($input['status'] ?? ''))]);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'invoice' && $method === 'POST') {
+                    $this->json(['data' => $this->invoices->createFromQuotation($id, $input)], 201);
+                    return;
+                }
+            }
+
+            if ($segments === ['invoices']) {
+                if ($method === 'GET') {
+                    $this->json(['data' => $this->invoices->all(), 'statuses' => InvoiceService::STATUSES]);
+                    return;
+                }
+                if ($method === 'POST') {
+                    $this->json(['data' => $this->invoices->create($input)], 201);
+                    return;
+                }
+            }
+
+            if (($segments[0] ?? '') === 'invoices' && isset($segments[1])) {
+                $id = $segments[1];
+                if (count($segments) === 2 && $method === 'GET') {
+                    $this->json(['data' => $this->invoices->get($id)]);
+                    return;
+                }
+                if (count($segments) === 2 && in_array($method, ['PUT','PATCH'], true)) {
+                    $this->json(['data' => $this->invoices->update($id, $input)]);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'issue' && $method === 'POST') {
+                    $this->json(['data' => $this->invoices->issue($id)]);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'void' && $method === 'POST') {
+                    $this->json(['data' => $this->invoices->void($id, (string) ($input['reason'] ?? ''))]);
+                    return;
+                }
+            }
+
             if ($segments === ['search'] && $method === 'GET') {
                 $this->json(['data' => $this->search->search((string) ($_GET['q'] ?? ''))]);
                 return;
@@ -200,9 +307,7 @@ final class ApiController
     private function input(): array
     {
         $raw = (string) file_get_contents('php://input');
-        if ($raw === '') {
-            return $_POST ?: [];
-        }
+        if ($raw === '') return $_POST ?: [];
         $decoded = json_decode($raw, true);
         return is_array($decoded) ? $decoded : [];
     }
