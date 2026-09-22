@@ -6,6 +6,7 @@ namespace Ecrm\Domain\Finance;
 use DateTimeImmutable;
 use DateTimeZone;
 use Ecrm\Audit\AuditLedger;
+use Ecrm\Domain\Admin\SettingsService;
 use Ecrm\Search\SearchIndex;
 use Ecrm\Storage\AtomicJsonStore;
 use Ecrm\Support\ExclusiveLock;
@@ -26,7 +27,8 @@ final class PaymentService
         private Sequence $sequence,
         private SearchIndex $search,
         private AuditLedger $audit,
-        private ?string $lockRoot = null
+        private ?string $lockRoot = null,
+        private ?SettingsService $settings = null
     ) {}
 
     public function create(array $input): array
@@ -62,10 +64,11 @@ final class PaymentService
         }
 
         $year = gmdate('Y');
+        $prefix = (string) (($this->settings?->get()['payment_prefix'] ?? null) ?: 'PAY');
         $now = gmdate(DATE_ATOM);
         $record = [
             'id' => UuidV7::generate(),
-            'number' => $this->sequence->next('payments-' . $year, 'PAY-' . $year . '-'),
+            'number' => $this->sequence->next('payments-' . $year, $prefix . '-' . $year . '-'),
             'customer_id' => $customerId,
             'batch_id' => $batchId !== '' ? $batchId : null,
             'amount_paise' => $amountPaise,
