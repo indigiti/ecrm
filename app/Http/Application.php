@@ -24,7 +24,7 @@ final class Application
     {
         header('Content-Type: text/html; charset=utf-8');
 
-        $manifestPath = Runtime::publicRoot() . '/.vite/manifest.json';
+        $manifestPath = Runtime::publicRoot() . '/manifest.json';
         $manifest = is_file($manifestPath)
             ? (json_decode((string) file_get_contents($manifestPath), true) ?: [])
             : [];
