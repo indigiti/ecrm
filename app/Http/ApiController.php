@@ -275,6 +275,7 @@ final class ApiController
                         'invoices' => array_values(array_filter($this->invoices->all(), static fn(array $i): bool => ($i['customer_id'] ?? null) === $id)),
                         'payments' => array_values(array_filter($this->payments->all(), static fn(array $p): bool => ($p['customer_id'] ?? null) === $id)),
                         'receivables' => $this->receivables->ageing($id),
+                        'documents' => $this->documents->all('customer', $id),
                     ]]);
                     return;
                 }
@@ -772,7 +773,11 @@ final class ApiController
                     return;
                 }
                 if (($segments[2] ?? '') === 'download' && $method === 'GET') {
-                    $this->downloadDocument($documentId);
+                    $this->downloadDocument($documentId, false);
+                    return;
+                }
+                if (($segments[2] ?? '') === 'content' && $method === 'GET') {
+                    $this->downloadDocument($documentId, true);
                     return;
                 }
                 if (($segments[2] ?? '') === 'archive' && $method === 'POST') {
@@ -845,7 +850,7 @@ final class ApiController
         }
     }
 
-    private function downloadDocument(string $id): void
+    private function downloadDocument(string $id, bool $inline = false): void
     {
         $file = $this->documents->file($id);
         $record = $file['record'];
@@ -853,7 +858,7 @@ final class ApiController
 
         header('Content-Type: ' . (string) $record['mime_type']);
         header('Content-Length: ' . (string) filesize($path));
-        header('Content-Disposition: attachment; filename="' . str_replace('"', '', (string) $record['original_name']) . '"');
+        header('Content-Disposition: ' . ($inline ? 'inline' : 'attachment') . '; filename="' . str_replace('"', '', (string) $record['original_name']) . '"');
         header('X-Content-Type-Options: nosniff');
         readfile($path);
     }
