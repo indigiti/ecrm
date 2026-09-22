@@ -1,10 +1,11 @@
 import './style.css';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import QRCode from 'qrcode';
 
 const app = document.querySelector('#app');
-const state = { view: 'dashboard', map: null, searchTimer: null, financeTab: 'receipts' };
-const activeViews = ['dashboard','customers','leads','followups','map','products','quotations','invoices','payments'];
+const state = { view: 'dashboard', map: null, searchTimer: null, financeTab: 'receipts', inventoryTab: 'stock' };
+const activeViews = ['dashboard','customers','leads','followups','map','products','inventory','quotations','invoices','payments'];
 const nav = [
   ['dashboard','Dashboard'],['customers','Customers'],['leads','Leads'],['followups','Follow-ups'],['map','Map'],
   ['products','Products'],['inventory','Inventory'],['workshop','Workshop'],['quotations','Quotations'],
@@ -64,7 +65,7 @@ function shell() {
     btn.addEventListener('click', function(){ state.view = btn.dataset.view; shell(); });
   });
   document.querySelector('#new-customer').addEventListener('click', customerModal);
-  document.querySelector('#scan-qr').addEventListener('click', function(){ toast('QR scanning is reserved for the inventory phase.'); });
+  document.querySelector('#scan-qr').addEventListener('click', qrScanModal);
 
   const search = document.querySelector('#global-search');
   search.addEventListener('input', function(){
@@ -99,7 +100,9 @@ async function searchGlobal(query) {
         box.classList.add('hidden');
         if (el.dataset.type === 'customer') openCustomer(el.dataset.id);
         if (el.dataset.type === 'lead') { state.view = 'leads'; shell(); }
-        if (el.dataset.type === 'product') { state.view = 'products'; shell(); }
+        if (el.dataset.type === 'product') { state.view = 'products'; shell(); setTimeout(function(){ openProduct(el.dataset.id); },0); }
+        if (el.dataset.type === 'location') { state.view = 'inventory'; state.inventoryTab = 'locations'; shell(); }
+        if (el.dataset.type === 'product_unit') { state.view = 'inventory'; shell(); setTimeout(function(){ openUnit(el.dataset.id); },0); }
         if (el.dataset.type === 'quotation') { state.view = 'quotations'; shell(); }
         if (el.dataset.type === 'invoice') { state.view = 'invoices'; shell(); }
         if (el.dataset.type === 'payment') { state.view = 'payments'; shell(); setTimeout(function(){ openPayment(el.dataset.id); },0); }
@@ -122,6 +125,7 @@ async function renderView() {
     if (state.view === 'followups') return followups(w);
     if (state.view === 'map') return mapView(w);
     if (state.view === 'products') return products(w);
+    if (state.view === 'inventory') return inventoryWorkspace(w);
     if (state.view === 'quotations') return quotations(w);
     if (state.view === 'invoices') return invoices(w);
     if (state.view === 'payments') return paymentsWorkspace(w);
@@ -400,7 +404,7 @@ async function products(w) {
   w.querySelectorAll('[data-product]').forEach(function(btn){
     btn.onclick = function(){
       const record = rows.find(function(row){ return row.id === btn.dataset.product; });
-      if (record) productModal(record);
+      if (record) openProduct(record.id);
     };
   });
 }
@@ -426,6 +430,353 @@ function productModal(product) {
       return api(product ? 'products/' + product.id : 'products', {method:product ? 'PATCH' : 'POST', body:payload});
     }
   );
+}
+
+
+async function openProduct(id) {
+  state.view = 'products';
+  const w = document.querySelector('#workspace');
+  w.innerHTML = '<div class="loading">Loading product…</div>';
+
+  try {
+    const payload = await api('products/' + id + '/overview');
+    const data = payload.data, p = data.product, stock = data.stock;
+    const locations = stock.locations.length ? stock.locations.map(function(row){
+      return '<button class="stock-location" data-location-stock="' + esc(row.location_id) + '"><span><b>' + esc(row.location_name) + '</b><small>' + esc(row.location_code) + '</small></span><strong>' + esc(row.quantity) + ' ' + esc(p.unit || '') + '</strong></button>';
+    }).join('') : '<div class="empty-small">No stock received yet.</div>';
+
+    const units = data.units.length ? data.units.slice(0,10).map(function(unit){
+      return '<button class="unit-row" data-unit="' + esc(unit.id) + '"><span><b>' + esc(unit.serial_no) + '</b><small>' + esc(unit.batch_no || 'No batch') + '</small></span><i class="pill">' + esc(unit.lifecycle_status) + '</i></button>';
+    }).join('') : '<div class="empty-small">No serialized units.</div>';
+
+    const movements = data.movements.length ? data.movements.slice(0,10).map(function(m){
+      return '<div class="movement-mini"><span><b>' + esc(String(m.type || '').replaceAll('_',' ')) + '</b><small>#' + esc(m.ledger_seq || '') + ' · ' + esc(m.created_at ? new Date(m.created_at).toLocaleString() : '') + '</small></span><strong>' + esc(m.quantity) + ' ' + esc(p.unit || '') + '</strong></div>';
+    }).join('') : '<div class="empty-small">No movement history.</div>';
+
+    w.innerHTML =
+      '<button class="back" id="back-products">← Products</button>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(p.code) + (p.sku ? ' · ' + esc(p.sku) : '') + '</p><h1>' + esc(p.name) + '</h1><p>' + esc(p.brand || p.category || 'Product') + (p.model ? ' · ' + esc(p.model) : '') + '</p></div><div class="record-actions"><button class="soft" id="edit-product">Edit</button>' + (p.serial_tracking ? '<button class="soft" id="add-unit">+ Serial Unit</button>' : '') + '<button class="primary" id="product-movement">+ Stock Movement</button></div></section>' +
+      '<section class="metrics inventory-metrics">' +
+        metric('Current stock', stock.total_quantity + ' ' + (p.unit || ''), stock.locations.length + ' location(s)') +
+        metric('Selling price', moneyPaise(p.selling_price_paise), 'GST ' + ((p.gst_bps || 0) / 100) + '%') +
+        metric('Serialized units', data.units.length, p.serial_tracking ? 'Unit-level tracking enabled' : 'Quantity tracked') +
+      '</section>' +
+      '<section class="dash-grid inventory-detail-grid"><article class="panel"><p class="eyebrow">STOCK BY LOCATION</p><div class="stock-location-list">' + locations + '</div></article><article class="panel"><p class="eyebrow">SERIALIZED UNITS</p><div class="unit-list">' + units + '</div></article><article class="panel wide"><p class="eyebrow">RECENT MOVEMENTS</p><div class="movement-list">' + movements + '</div></article></section>';
+
+    document.querySelector('#back-products').onclick = function(){ products(w); };
+    document.querySelector('#edit-product').onclick = function(){ productModal(p); };
+    document.querySelector('#product-movement').onclick = function(){ movementModal(p.id); };
+    const addUnit = document.querySelector('#add-unit');
+    if (addUnit) addUnit.onclick = function(){ productUnitModal(p.id); };
+    w.querySelectorAll('[data-unit]').forEach(function(btn){ btn.onclick = function(){ openUnit(btn.dataset.unit); }; });
+    w.querySelectorAll('[data-location-stock]').forEach(function(btn){
+      btn.onclick = function(){ state.view = 'inventory'; state.inventoryTab = 'locations'; shell(); };
+    });
+  } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
+async function inventoryWorkspace(w) {
+  const tab = state.inventoryTab || 'stock';
+  const tabs = [['stock','Stock'],['locations','Locations'],['movements','Movements'],['units','Serialized Units']];
+
+  w.innerHTML =
+    '<section class="page-head"><div><p class="eyebrow">OPERATIONS</p><h1>Inventory</h1><p>Stock is derived from an append-only movement ledger across hierarchical locations.</p></div><div class="record-actions"><button class="soft" id="inventory-location">+ Location</button><button class="primary" id="inventory-movement">+ Movement</button></div></section>' +
+    '<div class="finance-tabs inventory-tabs">' + tabs.map(function(item){ return '<button data-inventory-tab="' + item[0] + '" class="' + (item[0] === tab ? 'active' : '') + '">' + item[1] + '</button>'; }).join('') + '</div>' +
+    '<div id="inventory-content"><div class="loading">Loading inventory…</div></div>';
+
+  w.querySelectorAll('[data-inventory-tab]').forEach(function(btn){
+    btn.onclick = function(){ state.inventoryTab = btn.dataset.inventoryTab; inventoryWorkspace(w); };
+  });
+  document.querySelector('#inventory-location').onclick = function(){ locationModal(); };
+  document.querySelector('#inventory-movement').onclick = function(){ movementModal(); };
+  const content = document.querySelector('#inventory-content');
+
+  try {
+    if (tab === 'stock') {
+      const payload = await api('inventory/stock');
+      const rows = payload.data;
+      const body = rows.length ? rows.map(function(row){
+        return '<button class="inventory-stock-row" data-product-stock="' + esc(row.product_id) + '"><span><b>' + esc(row.product_name) + '</b><small>' + esc(row.product_code) + '</small></span><strong>' + esc(row.total_quantity) + '</strong><span>' + row.locations.length + ' location(s)</span></button>';
+      }).join('') : '<div class="empty-state"><b>No products in stock</b><span>Receive stock into a location to start the inventory ledger.</span></div>';
+
+      content.innerHTML = '<article class="table-card inventory-card"><div class="inventory-stock-head"><span>Product</span><span>Quantity</span><span>Locations</span></div>' + body + '</article>';
+      content.querySelectorAll('[data-product-stock]').forEach(function(btn){ btn.onclick = function(){ openProduct(btn.dataset.productStock); }; });
+      return;
+    }
+
+    if (tab === 'locations') {
+      const payload = await api('locations/tree');
+      const flat = flattenLocations(payload.data);
+      const body = flat.length ? flat.map(function(row){
+        return '<button class="location-row" data-location="' + esc(row.id) + '" style="--depth:' + row.depth + '"><span class="location-indent"></span><span><b>' + esc(row.name) + '</b><small>' + esc(row.code) + ' · ' + esc(String(row.type || '').replaceAll('_',' ')) + '</small></span><span><i class="pill">' + esc(row.status) + '</i></span></button>';
+      }).join('') : '<div class="empty-state"><b>No locations yet</b><span>Create a warehouse, showroom, rack, workshop bay or other stock location.</span></div>';
+
+      content.innerHTML = '<article class="panel location-panel"><div class="row"><div><p class="eyebrow">LOCATION TREE</p><h2>' + flat.length + ' locations</h2></div></div><div class="location-tree">' + body + '</div></article>';
+      content.querySelectorAll('[data-location]').forEach(function(btn){ btn.onclick = function(){ openLocation(btn.dataset.location); }; });
+      return;
+    }
+
+    if (tab === 'movements') {
+      const results = await Promise.all([api('inventory/movements'), api('products'), api('locations')]);
+      const rows = results[0].data, products = results[1].data, locations = results[2].data;
+      const productMap = Object.fromEntries(products.map(function(p){ return [p.id,p]; }));
+      const locationMap = Object.fromEntries(locations.map(function(l){ return [l.id,l]; }));
+
+      const body = rows.length ? rows.map(function(m){
+        const p = productMap[m.product_id] || {};
+        const from = m.from_location_id ? (locationMap[m.from_location_id] || {}).name || 'Unknown' : 'External';
+        const to = m.to_location_id ? (locationMap[m.to_location_id] || {}).name || 'Unknown' : 'External';
+        return '<div class="movement-row"><span><b>#' + esc(m.ledger_seq || '') + ' · ' + esc(String(m.type || '').replaceAll('_',' ')) + '</b><small>' + esc(m.created_at ? new Date(m.created_at).toLocaleString() : '') + '</small></span><span><b>' + esc(p.name || m.product_id) + '</b><small>' + esc(from) + ' → ' + esc(to) + '</small></span><strong>' + esc(m.quantity) + ' ' + esc(p.unit || '') + '</strong>' + (m.type !== 'reversal' ? '<button class="soft" data-reverse-movement="' + esc(m.id) + '">Reverse</button>' : '<span><i class="pill">reversal</i></span>') + '</div>';
+      }).join('') : '<div class="empty-state"><b>No stock movements</b><span>Every receive, transfer, sale, issue and correction will appear here.</span></div>';
+
+      content.innerHTML = '<article class="panel"><p class="eyebrow">MOVEMENT LEDGER</p><div class="movement-ledger">' + body + '</div></article>';
+      content.querySelectorAll('[data-reverse-movement]').forEach(function(btn){ btn.onclick = function(){ reverseMovementModal(btn.dataset.reverseMovement); }; });
+      return;
+    }
+
+    if (tab === 'units') {
+      const results = await Promise.all([api('product-units'), api('products')]);
+      const units = results[0].data, products = results[1].data;
+      const productMap = Object.fromEntries(products.map(function(p){ return [p.id,p]; }));
+      const body = units.length ? units.map(function(unit){
+        const p = productMap[unit.product_id] || {};
+        return '<button class="serialized-row" data-unit="' + esc(unit.id) + '"><span><b>' + esc(unit.serial_no) + '</b><small>' + esc(unit.batch_no || 'No batch') + '</small></span><span><b>' + esc(p.name || 'Unknown product') + '</b><small>' + esc(p.code || '') + '</small></span><i class="pill">' + esc(unit.lifecycle_status) + '</i></button>';
+      }).join('') : '<div class="empty-state"><b>No serialized units</b><span>Add serial units from a serialized Product Master record.</span></div>';
+
+      content.innerHTML = '<article class="table-card serialized-card"><div class="serialized-head"><span>Serial</span><span>Product</span><span>Status</span></div>' + body + '</article>';
+      content.querySelectorAll('[data-unit]').forEach(function(btn){ btn.onclick = function(){ openUnit(btn.dataset.unit); }; });
+    }
+  } catch(e) { content.innerHTML = errorCard(e.message); }
+}
+
+function flattenLocations(nodes, depth) {
+  depth = depth || 0;
+  let rows = [];
+  (nodes || []).forEach(function(node){
+    rows.push(Object.assign({}, node, {depth:depth}));
+    rows = rows.concat(flattenLocations(node.children || [], depth + 1));
+  });
+  return rows;
+}
+
+async function openLocation(id) {
+  state.view = 'inventory';
+  state.inventoryTab = 'locations';
+  const w = document.querySelector('#workspace');
+  w.innerHTML = '<div class="loading">Loading location…</div>';
+  try {
+    const payload = await api('locations/' + id + '/stock');
+    const data = payload.data, loc = data.location;
+    const stock = data.stock.length ? data.stock.map(function(row){
+      return '<button class="stock-location" data-product-stock="' + esc(row.product_id) + '"><span><b>' + esc(row.product_name) + '</b><small>' + esc(row.product_code) + '</small></span><strong>' + esc(row.quantity) + '</strong></button>';
+    }).join('') : '<div class="empty-small">No stock at this location.</div>';
+
+    w.innerHTML =
+      '<button class="back" id="back-locations">← Locations</button>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(loc.code) + ' · ' + esc(String(loc.type || '').replaceAll('_',' ')) + '</p><h1>' + esc(loc.name) + '</h1><p>' + esc(loc.address || 'No address') + '</p></div><div class="record-actions"><button class="soft" id="edit-location">Edit</button><button class="primary" id="location-movement">+ Movement</button></div></section>' +
+      '<section class="dash-grid"><article class="panel wide"><p class="eyebrow">STOCK AT LOCATION</p><div class="stock-location-list">' + stock + '</div></article></section>';
+
+    document.querySelector('#back-locations').onclick = function(){ inventoryWorkspace(w); };
+    document.querySelector('#edit-location').onclick = function(){ locationModal(loc); };
+    document.querySelector('#location-movement').onclick = function(){ movementModal(null,null,loc.id); };
+    w.querySelectorAll('[data-product-stock]').forEach(function(btn){ btn.onclick = function(){ openProduct(btn.dataset.productStock); }; });
+  } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
+async function locationModal(location) {
+  location = location || null;
+  try {
+    const payload = await api('locations');
+    const rows = payload.data.filter(function(r){ return !location || r.id !== location.id; });
+    const parentOptions = '<option value="">No parent</option>' + rows.map(function(r){
+      return '<option value="' + esc(r.id) + '"' + (location && location.parent_id === r.id ? ' selected' : '') + '>' + esc(r.name) + ' · ' + esc(r.code) + '</option>';
+    }).join('');
+    const types = payload.types.map(function(type){
+      return '<option value="' + esc(type) + '"' + (location && location.type === type ? ' selected' : '') + '>' + esc(type.replaceAll('_',' ')) + '</option>';
+    }).join('');
+
+    modal(location ? 'Edit location' : 'New location',
+      '<label class="full">Location name<input required name="name" value="' + esc(location ? location.name : '') + '"></label>' +
+      '<label>Type<select required name="type">' + types + '</select></label><label>Parent<select name="parent_id">' + parentOptions + '</select></label>' +
+      '<label class="full">Address<input name="address" value="' + esc(location ? location.address || '' : '') + '"></label>' +
+      '<label>Latitude<input name="latitude" type="number" step="any" value="' + esc(location && location.latitude != null ? location.latitude : '') + '"></label><label>Longitude<input name="longitude" type="number" step="any" value="' + esc(location && location.longitude != null ? location.longitude : '') + '"></label>' +
+      '<label>Contact name<input name="contact_name" value="' + esc(location ? location.contact_name || '' : '') + '"></label><label>Contact mobile<input name="contact_mobile" value="' + esc(location ? location.contact_mobile || '' : '') + '"></label>' +
+      (location ? '<label>Status<select name="status"><option value="active"' + (location.status === 'active' ? ' selected' : '') + '>Active</option><option value="inactive"' + (location.status === 'inactive' ? ' selected' : '') + '>Inactive</option><option value="archived"' + (location.status === 'archived' ? ' selected' : '') + '>Archived</option></select></label>' : ''),
+      async function(payload){
+        const result = await api(location ? 'locations/' + location.id : 'locations',{method:location ? 'PATCH' : 'POST',body:payload});
+        return function(){ openLocation(result.data.id); };
+      }
+    );
+  } catch(e) { toast(e.message,true); }
+}
+
+async function movementModal(productId, unitId, locationId) {
+  productId = productId || '';
+  unitId = unitId || '';
+  locationId = locationId || '';
+  try {
+    const results = await Promise.all([api('products'), api('locations'), api('product-units')]);
+    const products = results[0].data.filter(function(p){ return p.status === 'active'; });
+    const locations = results[1].data.filter(function(l){ return l.status === 'active'; });
+    const units = results[2].data.filter(function(u){ return u.lifecycle_status === 'active'; });
+
+    const productOptions = products.map(function(p){ return '<option value="' + esc(p.id) + '"' + (p.id === productId ? ' selected' : '') + '>' + esc(p.name) + ' · ' + esc(p.code) + '</option>'; }).join('');
+    const locationOptions = '<option value="">External / none</option>' + locations.map(function(l){ return '<option value="' + esc(l.id) + '"' + (l.id === locationId ? ' selected' : '') + '>' + esc(l.name) + ' · ' + esc(l.code) + '</option>'; }).join('');
+    const unitOptions = '<option value="">Not serialized</option>' + units.map(function(u){ return '<option value="' + esc(u.id) + '"' + (u.id === unitId ? ' selected' : '') + '>' + esc(u.serial_no) + '</option>'; }).join('');
+
+    modal('Stock movement',
+      '<label class="full">Product<select required name="product_id"><option value="">Select product</option>' + productOptions + '</select></label>' +
+      '<label>Type<select required name="type"><option value="receive">Receive</option><option value="transfer">Transfer</option><option value="issue">Issue</option><option value="return">Return</option><option value="sale">Sale</option><option value="customer_return">Customer Return</option><option value="workshop_in">Workshop In</option><option value="workshop_out">Workshop Out</option><option value="adjustment">Adjustment</option><option value="damaged">Damaged</option><option value="lost">Lost</option><option value="scrap">Scrap</option></select></label>' +
+      '<label>Quantity<input required name="quantity" type="number" min="0.001" step="0.001" value="1"></label>' +
+      '<label>Source location<select name="from_location_id">' + locationOptions + '</select></label><label>Destination location<select name="to_location_id">' + locationOptions + '</select></label>' +
+      '<label>Serialized unit<select name="product_unit_id">' + unitOptions + '</select></label><label>Adjustment direction<select name="adjustment_direction"><option value="">Not adjustment</option><option value="increase">Increase</option><option value="decrease">Decrease</option></select></label>' +
+      '<label>Reference type<input name="reference_type" placeholder="invoice / workshop job / PO"></label><label>Reference ID<input name="reference_id"></label>' +
+      '<label class="full">Notes<textarea name="notes"></textarea></label>',
+      async function(payload){
+        await api('inventory/movements',{method:'POST',body:payload});
+        return function(){
+          if (unitId) openUnit(unitId);
+          else if (productId) openProduct(productId);
+          else { state.view='inventory'; state.inventoryTab='movements'; shell(); }
+        };
+      }
+    );
+  } catch(e) { toast(e.message,true); }
+}
+
+function reverseMovementModal(id) {
+  modal('Reverse stock movement',
+    '<label class="full">Reason<textarea required name="reason" placeholder="The original movement stays in history; this creates the opposite movement."></textarea></label>',
+    async function(payload){
+      await api('inventory/movements/' + id + '/reverse',{method:'POST',body:payload});
+      return function(){ state.view='inventory'; state.inventoryTab='movements'; shell(); };
+    }
+  );
+}
+
+async function productUnitModal(productId) {
+  productId = productId || '';
+  try {
+    const products = (await api('products')).data.filter(function(p){ return p.status === 'active' && p.serial_tracking; });
+    if (!products.length) { toast('Enable serial tracking on a Product Master record first', true); return; }
+    const options = products.map(function(p){ return '<option value="' + esc(p.id) + '"' + (p.id === productId ? ' selected' : '') + '>' + esc(p.name) + ' · ' + esc(p.code) + '</option>'; }).join('');
+
+    modal('New serialized unit',
+      '<label class="full">Product<select required name="product_id">' + options + '</select></label><label>Serial number<input required name="serial_no"></label><label>Batch number<input name="batch_no"></label><label class="full">Notes<textarea name="notes"></textarea></label>',
+      async function(payload){
+        const result = await api('product-units',{method:'POST',body:payload});
+        return function(){ openUnit(result.data.id); };
+      }
+    );
+  } catch(e) { toast(e.message,true); }
+}
+
+async function openUnit(id) {
+  state.view = 'inventory';
+  state.inventoryTab = 'units';
+  const w = document.querySelector('#workspace');
+  w.innerHTML = '<div class="loading">Loading serialized unit…</div>';
+
+  try {
+    const payload = await api('product-units/' + id);
+    const data = payload.data, unit = data.unit;
+    const product = (await api('products/' + unit.product_id)).data;
+    const qrValue = 'ecrm:unit:' + unit.qr_token;
+    const qrUrl = await QRCode.toDataURL(qrValue,{width:280,margin:1,errorCorrectionLevel:'M'});
+
+    const history = data.history.length ? data.history.map(function(m){
+      return '<div class="movement-mini"><span><b>#' + esc(m.ledger_seq || '') + ' · ' + esc(String(m.type || '').replaceAll('_',' ')) + '</b><small>' + esc(m.created_at ? new Date(m.created_at).toLocaleString() : '') + '</small></span><strong>' + esc(m.quantity) + '</strong></div>';
+    }).join('') : '<div class="empty-small">No movement history. Receive the unit into stock first.</div>';
+
+    w.innerHTML =
+      '<button class="back" id="back-units">← Serialized Units</button>' +
+      '<section class="record-head"><div><p class="eyebrow">' + esc(product.code) + ' · SERIALIZED UNIT</p><h1>' + esc(unit.serial_no) + '</h1><p>' + esc(product.name) + (unit.batch_no ? ' · Batch ' + esc(unit.batch_no) : '') + '</p></div><div class="record-actions"><button class="soft" id="print-unit-qr">Print QR</button><button class="primary" id="move-unit">+ Movement</button></div></section>' +
+      '<section class="dash-grid unit-detail-grid"><article class="panel qr-panel"><p class="eyebrow">UNIT QR</p><img class="qr-image" src="' + esc(qrUrl) + '" alt="QR for ' + esc(unit.serial_no) + '"><b>' + esc(unit.serial_no) + '</b><small>' + esc(unit.qr_token) + '</small></article><article class="panel"><p class="eyebrow">CURRENT STATE</p><dl><dt>Location</dt><dd>' + esc(data.location ? data.location.name : 'Outside stock / not received') + '</dd><dt>Status</dt><dd>' + esc(data.operational_status) + '</dd><dt>Lifecycle</dt><dd>' + esc(unit.lifecycle_status) + '</dd></dl>' + (unit.lifecycle_status === 'active' && !data.location_id ? '<button class="soft" id="retire-unit">Retire unit</button>' : '') + '</article><article class="panel wide"><p class="eyebrow">UNIT MOVEMENT HISTORY</p><div class="movement-list">' + history + '</div></article></section>';
+
+    document.querySelector('#back-units').onclick = function(){ inventoryWorkspace(w); };
+    document.querySelector('#print-unit-qr').onclick = function(){ window.print(); };
+    document.querySelector('#move-unit').onclick = function(){ movementModal(unit.product_id,unit.id,data.location_id || ''); };
+    const retire = document.querySelector('#retire-unit');
+    if (retire) retire.onclick = function(){ retireUnitModal(unit); };
+  } catch(e) { w.innerHTML = errorCard(e.message); }
+}
+
+function retireUnitModal(unit) {
+  modal('Retire serialized unit',
+    '<label class="full">Reason<textarea required name="reason"></textarea></label>',
+    async function(payload){
+      await api('product-units/' + unit.id + '/retire',{method:'POST',body:payload});
+      return function(){ openUnit(unit.id); };
+    }
+  );
+}
+
+function normalizeQrToken(value) {
+  let raw = String(value || '').trim();
+  if (raw.toLowerCase().startsWith('ecrm:unit:')) raw = raw.slice(10);
+  return raw;
+}
+
+async function resolveQr(value) {
+  const token = normalizeQrToken(value);
+  if (!token) throw new Error('QR token is empty');
+  const payload = await api('qr/unit/' + encodeURIComponent(token));
+  document.querySelector('#modal-root').innerHTML = '';
+  openUnit(payload.data.unit.id);
+}
+
+function qrScanModal() {
+  const root = document.querySelector('#modal-root');
+  let stream = null;
+  let scanning = false;
+
+  function close() {
+    scanning = false;
+    if (stream) stream.getTracks().forEach(function(track){ track.stop(); });
+    root.innerHTML = '';
+  }
+
+  root.innerHTML =
+    '<div class="modal-backdrop"><div class="modal qr-scan-modal"><div class="modal-head"><div><p class="eyebrow">INVENTORY</p><h2>Scan unit QR</h2></div><button type="button" class="icon-btn" id="close-qr-scan">×</button></div><video id="qr-video" playsinline muted class="qr-video hidden"></video><form id="qr-form" class="qr-manual"><label>QR token or code<input autofocus name="token" placeholder="ecrm:unit:…"></label><button class="primary" type="submit">Open Unit</button></form><div class="modal-actions"><button type="button" class="soft" id="qr-camera">Use Camera</button></div></div></div>';
+
+  document.querySelector('#close-qr-scan').onclick = close;
+  document.querySelector('#qr-form').onsubmit = async function(e){
+    e.preventDefault();
+    try { await resolveQr(new FormData(e.currentTarget).get('token')); }
+    catch(err) { toast(err.message,true); }
+  };
+
+  document.querySelector('#qr-camera').onclick = async function(){
+    if (!('BarcodeDetector' in window) || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast('Camera QR detection is not supported in this browser. Enter the QR code manually.', true);
+      return;
+    }
+
+    try {
+      const detector = new BarcodeDetector({formats:['qr_code']});
+      stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+      const video = document.querySelector('#qr-video');
+      video.srcObject = stream;
+      video.classList.remove('hidden');
+      await video.play();
+      scanning = true;
+
+      const scan = async function(){
+        if (!scanning) return;
+        try {
+          const codes = await detector.detect(video);
+          if (codes.length && codes[0].rawValue) {
+            scanning = false;
+            await resolveQr(codes[0].rawValue);
+            if (stream) stream.getTracks().forEach(function(track){ track.stop(); });
+            return;
+          }
+        } catch(e) {}
+        requestAnimationFrame(scan);
+      };
+      scan();
+    } catch(err) { toast('Camera could not start: ' + err.message,true); }
+  };
 }
 
 async function quotations(w) {
