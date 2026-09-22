@@ -69,6 +69,12 @@ final class CustomerService
         if (($record['name'] ?? '') === '') {
             throw new InvalidArgumentException('Customer name is required');
         }
+        if (!in_array((string) ($record['status'] ?? 'active'), ['active', 'inactive', 'archived'], true)) {
+            throw new InvalidArgumentException('Invalid customer status');
+        }
+        if (($record['email'] ?? '') !== '' && !filter_var($record['email'], FILTER_VALIDATE_EMAIL)) {
+            throw new InvalidArgumentException('Invalid email address');
+        }
         $record['updated_at'] = gmdate(DATE_ATOM);
         $this->store->put('customers', $id, $record);
         $this->index($record);
