@@ -102,7 +102,8 @@ async function searchGlobal(query) {
         if (el.dataset.type === 'product') { state.view = 'products'; shell(); }
         if (el.dataset.type === 'quotation') { state.view = 'quotations'; shell(); }
         if (el.dataset.type === 'invoice') { state.view = 'invoices'; shell(); }
-        if (el.dataset.type === 'payment' || el.dataset.type === 'payment_batch') { state.view = 'payments'; shell(); }
+        if (el.dataset.type === 'payment') { state.view = 'payments'; shell(); setTimeout(function(){ openPayment(el.dataset.id); },0); }
+        if (el.dataset.type === 'payment_batch') { state.view = 'payments'; state.financeTab = 'batches'; shell(); }
       });
     });
   } catch (e) {
@@ -206,6 +207,7 @@ async function openCustomer(id) {
     document.querySelector('#add-followup-customer').onclick = function(){ followupModal(id); };
     w.querySelectorAll('[data-edit-contact]').forEach(function(btn){ btn.onclick = function(){ var record = data.contacts.find(function(x){ return x.id === btn.dataset.editContact; }); if (record) contactEditModal(record); }; });
     w.querySelectorAll('[data-edit-address]').forEach(function(btn){ btn.onclick = function(){ var record = data.addresses.find(function(x){ return x.id === btn.dataset.editAddress; }); if (record) addressEditModal(record); }; });
+    w.querySelectorAll('[data-payment]').forEach(function(btn){ btn.onclick = function(){ openPayment(btn.dataset.payment); }; });
   } catch (e) {
     w.innerHTML = errorCard(e.message);
   }
@@ -521,9 +523,11 @@ async function openInvoice(id) {
   const w = document.querySelector('#workspace');
   w.innerHTML = '<div class="loading">Loading invoice…</div>';
   try {
-    const payload = await api('invoices/' + id);
-    const inv = payload.data;
+    const results = await Promise.all([api('invoices/' + id), api('invoices/' + id + '/receivable')]);
+    const inv = results[0].data;
+    const receivable = results[1].data;
     let actions = '<button class="soft" id="print-current">Print / PDF</button>';
+    if (['issued','partially_paid'].includes(inv.status) && receivable.outstanding_paise > 0) actions += '<button class="primary" id="invoice-payment">+ Payment</button>';
     if (inv.status === 'draft') actions += '<button class="soft" id="edit-invoice">Edit</button><button class="primary" id="issue-invoice">Issue Invoice</button>';
     if (['draft','issued'].includes(inv.status)) actions += '<button class="soft" id="void-invoice">Void</button>';
 
@@ -531,6 +535,7 @@ async function openInvoice(id) {
       '<button class="back" id="back-invoices">← Invoices</button>' +
       '<section class="record-head"><div><p class="eyebrow">' + esc(inv.number) + '</p><h1>' + esc(inv.customer_snapshot.name) + '</h1><p>' + esc(inv.status) + (inv.due_date ? ' · due ' + esc(inv.due_date) : '') + '</p></div><div class="record-actions">' + actions + '</div></section>' +
       salesDocumentDetail(inv, 'Invoice') +
+      '<section class="metrics finance-metrics invoice-finance"><article><span>Allocated</span><strong>' + moneyPaise(receivable.allocated_paise) + '</strong><small>Applied receipts</small></article><article><span>Outstanding</span><strong>' + moneyPaise(receivable.outstanding_paise) + '</strong><small>' + esc(ageingLabel(receivable.ageing_bucket)) + '</small></article></section>' +
       '<section class="dash-grid"><article class="panel"><p class="eyebrow">TERMS</p><p class="document-note">' + esc(inv.terms || '—') + '</p></article><article class="panel"><p class="eyebrow">SOURCE</p><p class="document-note">' + (inv.quotation_id ? 'Approved quotation linked' : 'Standalone invoice') + '</p></article></section>';
 
     document.querySelector('#back-invoices').onclick = function(){ invoices(w); };
@@ -538,6 +543,8 @@ async function openInvoice(id) {
     if (printButton) printButton.onclick = function(){ window.print(); };
     const editButton = document.querySelector('#edit-invoice');
     if (editButton) editButton.onclick = function(){ salesDocumentModal('invoice', inv); };
+    const invoicePayment = document.querySelector('#invoice-payment');
+    if (invoicePayment) invoicePayment.onclick = function(){ paymentModal(inv.customer_id); };
     const issue = document.querySelector('#issue-invoice');
     if (issue) issue.onclick = async function(){
       try { await api('invoices/' + inv.id + '/issue',{method:'POST'}); toast('Invoice issued and locked'); openInvoice(inv.id); }
