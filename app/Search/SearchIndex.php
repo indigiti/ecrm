@@ -42,6 +42,53 @@ final class SearchIndex
         }
     }
 
+    public function replaceAll(array $entries): int
+    {
+        $this->ensure();
+        $lock = fopen($this->root . '/.lock', 'c+');
+        if (!$lock || !flock($lock, LOCK_EX)) {
+            throw new RuntimeException('Search index lock failed');
+        }
+
+        try {
+            $rows = [];
+            foreach ($entries as $entry) {
+                $type = (string) ($entry['type'] ?? '');
+                $id = (string) ($entry['id'] ?? '');
+                $label = (string) ($entry['label'] ?? '');
+                if ($type === '' || $id === '' || $label === '') {
+                    throw new RuntimeException('Invalid search index entry');
+                }
+
+                $rows[$type . ':' . $id] = [
+                    'type' => $type,
+                    'id' => $id,
+                    'label' => $label,
+                    'terms' => $this->normalize(implode(' ', array_filter(array_merge(
+                        [$label],
+                        is_array($entry['terms'] ?? null) ? $entry['terms'] : []
+                    ), 'is_scalar'))),
+                    'meta' => is_array($entry['meta'] ?? null) ? $entry['meta'] : [],
+                    'updated_at' => gmdate(DATE_ATOM),
+                ];
+            }
+
+            ksort($rows);
+            $path = $this->root . '/global.json';
+            $tmp = $path . '.' . bin2hex(random_bytes(4)) . '.tmp';
+            file_put_contents($tmp, json_encode($rows, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+            if (!rename($tmp, $path)) {
+                @unlink($tmp);
+                throw new RuntimeException('Search index publish failed');
+            }
+
+            return count($rows);
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
     public function search(string $query, int $limit = 20): array
     {
         $query = $this->normalize($query);
