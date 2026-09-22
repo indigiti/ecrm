@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace Ecrm\Domain\Finance;
 
+use DateTimeImmutable;
+use DateTimeZone;
 use Ecrm\Audit\AuditLedger;
 use Ecrm\Search\SearchIndex;
 use Ecrm\Storage\AtomicJsonStore;
@@ -28,6 +30,11 @@ final class PaymentService
     ) {}
 
     public function create(array $input): array
+    {
+        return $this->withFinanceLock(fn(): array => $this->createUnlocked($input));
+    }
+
+    private function createUnlocked(array $input): array
     {
         $customerId = trim((string) ($input['customer_id'] ?? ''));
         if ($customerId === '' || !$this->store->get('customers', $customerId)) {
@@ -64,8 +71,8 @@ final class PaymentService
             'amount_paise' => $amountPaise,
             'method' => $method,
             'reference' => trim((string) ($input['reference'] ?? '')),
-            'method_meta' => is_array($input['method_meta'] ?? null) ? $input['method_meta'] : [],
-            'received_at' => $input['received_at'] ?? $now,
+            'method_meta' => $this->methodMeta($input['method_meta'] ?? []),
+            'received_at' => $this->normalizeReceivedAt($input['received_at'] ?? null),
             'notes' => trim((string) ($input['notes'] ?? '')),
             'status' => 'posted',
             'void_reason' => null,
@@ -124,6 +131,33 @@ final class PaymentService
     public function all(): array
     {
         return $this->store->all('payments');
+    }
+
+    private function methodMeta(mixed $input): array
+    {
+        if (!is_array($input)) return [];
+
+        $meta = [];
+        foreach ($input as $key => $value) {
+            if (!is_scalar($value) && $value !== null) continue;
+            $key = preg_replace('/[^a-zA-Z0-9_-]+/', '_', (string) $key) ?: 'field';
+            $meta[$key] = trim((string) ($value ?? ''));
+        }
+        return $meta;
+    }
+
+    private function normalizeReceivedAt(mixed $value): string
+    {
+        $value = trim((string) ($value ?? ''));
+        try {
+            $date = $value === ''
+                ? new DateTimeImmutable('now', new DateTimeZone('Asia/Kolkata'))
+                : new DateTimeImmutable($value, new DateTimeZone('Asia/Kolkata'));
+        } catch (\Throwable) {
+            throw new InvalidArgumentException('Invalid received date/time');
+        }
+
+        return $date->setTimezone(new DateTimeZone('UTC'))->format(DATE_ATOM);
     }
 
     private function withFinanceLock(callable $callback): mixed
