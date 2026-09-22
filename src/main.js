@@ -414,7 +414,8 @@ async function openQuotation(id) {
 }
 
 function quotationActions(q) {
-  let html = '';
+  let html = '<button class="soft" id="print-current">Print / PDF</button>';
+  if (['draft','sent','viewed','revised'].includes(q.status)) html += '<button class="soft" id="edit-quotation">Edit</button>';
   if (q.status === 'draft' || q.status === 'revised') html += '<button class="soft" data-qstatus="sent">Mark Sent</button>';
   if (q.status === 'sent') html += '<button class="soft" data-qstatus="viewed">Mark Viewed</button>';
   if (['draft','sent','viewed','revised'].includes(q.status)) html += '<button class="primary" data-qstatus="approved">Approve</button>';
@@ -424,6 +425,10 @@ function quotationActions(q) {
 }
 
 function bindQuotationActions(q, w) {
+  const printButton = document.querySelector('#print-current');
+  if (printButton) printButton.onclick = function(){ window.print(); };
+  const editButton = document.querySelector('#edit-quotation');
+  if (editButton) editButton.onclick = function(){ salesDocumentModal('quotation', q); };
   w.querySelectorAll('[data-qstatus]').forEach(function(btn){
     btn.onclick = async function(){
       try {
@@ -468,8 +473,8 @@ async function openInvoice(id) {
   try {
     const payload = await api('invoices/' + id);
     const inv = payload.data;
-    let actions = '';
-    if (inv.status === 'draft') actions += '<button class="primary" id="issue-invoice">Issue Invoice</button>';
+    let actions = '<button class="soft" id="print-current">Print / PDF</button>';
+    if (inv.status === 'draft') actions += '<button class="soft" id="edit-invoice">Edit</button><button class="primary" id="issue-invoice">Issue Invoice</button>';
     if (['draft','issued'].includes(inv.status)) actions += '<button class="soft" id="void-invoice">Void</button>';
 
     w.innerHTML =
@@ -479,6 +484,10 @@ async function openInvoice(id) {
       '<section class="dash-grid"><article class="panel"><p class="eyebrow">TERMS</p><p class="document-note">' + esc(inv.terms || '—') + '</p></article><article class="panel"><p class="eyebrow">SOURCE</p><p class="document-note">' + (inv.quotation_id ? 'Approved quotation linked' : 'Standalone invoice') + '</p></article></section>';
 
     document.querySelector('#back-invoices').onclick = function(){ invoices(w); };
+    const printButton = document.querySelector('#print-current');
+    if (printButton) printButton.onclick = function(){ window.print(); };
+    const editButton = document.querySelector('#edit-invoice');
+    if (editButton) editButton.onclick = function(){ salesDocumentModal('invoice', inv); };
     const issue = document.querySelector('#issue-invoice');
     if (issue) issue.onclick = async function(){
       try { await api('invoices/' + inv.id + '/issue',{method:'POST'}); toast('Invoice issued and locked'); openInvoice(inv.id); }
@@ -508,43 +517,54 @@ function voidInvoiceModal(invoice) {
   );
 }
 
-async function salesDocumentModal(kind) {
+async function salesDocumentModal(kind, record) {
+  record = record || null;
   const root = document.querySelector('#modal-root');
+
   try {
     const results = await Promise.all([api('customers'), api('products')]);
     const customers = results[0].data;
     const products = results[1].data.filter(function(p){ return p.status === 'active'; });
     if (!customers.length) { toast('Create a customer before creating sales documents', true); return; }
 
-    const customerOptions = customers.map(function(c){ return '<option value="' + esc(c.id) + '">' + esc(c.name) + ' · ' + esc(c.number) + '</option>'; }).join('');
-    const productOptions = '<option value="">Custom item</option>' + products.map(function(p){ return '<option value="' + esc(p.id) + '">' + esc(p.name) + (p.sku ? ' · ' + esc(p.sku) : '') + '</option>'; }).join('');
-    const title = kind === 'quotation' ? 'New quotation' : 'New invoice';
+    const customerOptions = customers.map(function(c){
+      return '<option value="' + esc(c.id) + '"' + (record && record.customer_id === c.id ? ' selected' : '') + '>' + esc(c.name) + ' · ' + esc(c.number) + '</option>';
+    }).join('');
+    const productOptions = '<option value="">Custom item</option>' + products.map(function(p){
+      return '<option value="' + esc(p.id) + '">' + esc(p.name) + (p.sku ? ' · ' + esc(p.sku) : '') + '</option>';
+    }).join('');
+
+    const title = (record ? 'Edit ' : 'New ') + (kind === 'quotation' ? 'quotation' : 'invoice');
+    const taxMode = record ? record.tax_mode : 'intra_state';
 
     root.innerHTML =
       '<div class="modal-backdrop"><form class="modal sales-modal"><div class="modal-head"><div><p class="eyebrow">SALES</p><h2>' + title + '</h2></div><button type="button" class="icon-btn" data-close>×</button></div>' +
-      '<div class="form-grid"><label>Customer<select id="sales-customer" required name="customer_id"><option value="">Select customer</option>' + customerOptions + '</select></label><label>Address<select id="sales-address" name="address_id"><option value="">No address</option></select></label><label>Tax mode<select name="tax_mode"><option value="intra_state">CGST + SGST</option><option value="inter_state">IGST</option></select></label>' +
-      (kind === 'quotation' ? '<label>Valid until<input type="date" name="valid_until"></label><label class="full">Payment terms<input name="payment_terms" placeholder="e.g. 50% advance"></label>' : '<label>Due date<input type="date" name="due_date"></label><label class="full">Terms<input name="terms" placeholder="Payment terms"></label>') +
-      '</div><div class="sales-lines-head"><p class="eyebrow">LINE ITEMS</p><button type="button" class="soft" id="add-sales-line">+ Line</button></div><div id="sales-lines"></div><label class="sales-note">Notes<textarea name="notes"></textarea></label><div class="modal-actions"><button type="button" class="soft" data-close>Cancel</button><button class="primary" type="submit">Save ' + (kind === 'quotation' ? 'Quotation' : 'Invoice') + '</button></div></form></div>';
+      '<div class="form-grid"><label>Customer<select id="sales-customer" required name="customer_id"><option value="">Select customer</option>' + customerOptions + '</select></label><label>Address<select id="sales-address" name="address_id"><option value="">No address</option></select></label><label>Tax mode<select name="tax_mode"><option value="intra_state"' + (taxMode === 'intra_state' ? ' selected' : '') + '>CGST + SGST</option><option value="inter_state"' + (taxMode === 'inter_state' ? ' selected' : '') + '>IGST</option></select></label>' +
+      (kind === 'quotation'
+        ? '<label>Valid until<input type="date" name="valid_until" value="' + esc(record ? record.valid_until || '' : '') + '"></label><label class="full">Payment terms<input name="payment_terms" value="' + esc(record ? record.payment_terms || '' : '') + '" placeholder="e.g. 50% advance"></label><label class="full">Delivery terms<input name="delivery_terms" value="' + esc(record ? record.delivery_terms || '' : '') + '"></label>'
+        : '<label>Due date<input type="date" name="due_date" value="' + esc(record ? record.due_date || '' : '') + '"></label><label class="full">Terms<input name="terms" value="' + esc(record ? record.terms || '' : '') + '" placeholder="Payment terms"></label>') +
+      '</div><div class="sales-lines-head"><p class="eyebrow">LINE ITEMS</p><button type="button" class="soft" id="add-sales-line">+ Line</button></div><div id="sales-lines"></div><label class="sales-note">Notes<textarea name="notes">' + esc(record ? record.notes || '' : '') + '</textarea></label><div class="modal-actions"><button type="button" class="soft" data-close>Cancel</button><button class="primary" type="submit">Save ' + (kind === 'quotation' ? 'Quotation' : 'Invoice') + '</button></div></form></div>';
 
     root.querySelectorAll('[data-close]').forEach(function(btn){ btn.onclick = function(){ root.innerHTML = ''; }; });
     const lines = root.querySelector('#sales-lines');
-    let lineNumber = 0;
 
-    function addLine() {
-      lineNumber++;
+    function addLine(item) {
+      item = item || {};
       const row = document.createElement('div');
       row.className = 'sales-line-edit';
       row.innerHTML =
         '<select class="line-product">' + productOptions + '</select>' +
-        '<input class="line-description" required placeholder="Description">' +
-        '<input class="line-qty" type="number" required min="0.001" step="0.001" value="1" placeholder="Qty">' +
-        '<input class="line-rate" type="number" required min="0" step="0.01" placeholder="Rate">' +
-        '<input class="line-discount" type="number" min="0" max="100" step="0.01" value="0" placeholder="Disc %">' +
-        '<input class="line-tax" type="number" min="0" max="100" step="0.01" value="0" placeholder="Tax %">' +
-        '<input class="line-unit" value="Nos" placeholder="Unit">' +
-        '<input class="line-hsn" placeholder="HSN/SAC">' +
+        '<input class="line-description" required placeholder="Description" value="' + esc(item.description || '') + '">' +
+        '<input class="line-qty" type="number" required min="0.001" step="0.001" value="' + esc(item.quantity || 1) + '" placeholder="Qty">' +
+        '<input class="line-rate" type="number" required min="0" step="0.01" value="' + esc(item.rate_paise != null ? (item.rate_paise / 100).toFixed(2) : '') + '" placeholder="Rate">' +
+        '<input class="line-discount" type="number" min="0" max="100" step="0.01" value="' + esc(item.discount_bps != null ? item.discount_bps / 100 : 0) + '" placeholder="Disc %">' +
+        '<input class="line-tax" type="number" min="0" max="100" step="0.01" value="' + esc(item.tax_bps != null ? item.tax_bps / 100 : 0) + '" placeholder="Tax %">' +
+        '<input class="line-unit" value="' + esc(item.unit || 'Nos') + '" placeholder="Unit">' +
+        '<input class="line-hsn" value="' + esc(item.hsn_sac || '') + '" placeholder="HSN/SAC">' +
         '<button type="button" class="icon-btn remove-line">×</button>';
+
       lines.appendChild(row);
+      if (item.product_id) row.querySelector('.line-product').value = item.product_id;
 
       row.querySelector('.remove-line').onclick = function(){ if (lines.children.length > 1) row.remove(); };
       row.querySelector('.line-product').onchange = function(e){
@@ -558,23 +578,29 @@ async function salesDocumentModal(kind) {
       };
     }
 
-    addLine();
-    root.querySelector('#add-sales-line').onclick = addLine;
+    if (record && record.items && record.items.length) record.items.forEach(addLine);
+    else addLine();
 
-    root.querySelector('#sales-customer').onchange = async function(e){
+    root.querySelector('#add-sales-line').onclick = function(){ addLine(); };
+
+    async function loadAddresses(customerId) {
       const addressSelect = root.querySelector('#sales-address');
       addressSelect.innerHTML = '<option value="">No address</option>';
-      if (!e.target.value) return;
-      try {
-        const detail = await api('customers/' + e.target.value + '/overview');
-        detail.data.addresses.forEach(function(a){
-          const option = document.createElement('option');
-          option.value = a.id;
-          option.textContent = (a.label || a.type) + ' · ' + (a.city || a.address);
-          addressSelect.appendChild(option);
-        });
-      } catch(err) { toast(err.message,true); }
+      if (!customerId) return;
+      const detail = await api('customers/' + customerId + '/overview');
+      detail.data.addresses.forEach(function(a){
+        const option = document.createElement('option');
+        option.value = a.id;
+        option.textContent = (a.label || a.type) + ' · ' + (a.city || a.address);
+        if (record && record.address_id === a.id) option.selected = true;
+        addressSelect.appendChild(option);
+      });
+    }
+
+    root.querySelector('#sales-customer').onchange = async function(e){
+      try { await loadAddresses(e.target.value); } catch(err) { toast(err.message,true); }
     };
+    if (record && record.customer_id) await loadAddresses(record.customer_id);
 
     root.querySelector('form').onsubmit = async function(e){
       e.preventDefault();
@@ -592,10 +618,15 @@ async function salesDocumentModal(kind) {
           hsn_sac: row.querySelector('.line-hsn').value
         };
       });
+
+      const endpoint = kind === 'quotation' ? 'quotations' : 'invoices';
       try {
-        const result = await api(kind === 'quotation' ? 'quotations' : 'invoices',{method:'POST',body:payload});
+        const result = await api(record ? endpoint + '/' + record.id : endpoint, {
+          method: record ? 'PATCH' : 'POST',
+          body: payload
+        });
         root.innerHTML = '';
-        toast((kind === 'quotation' ? 'Quotation ' : 'Invoice ') + result.data.number + ' created');
+        toast((kind === 'quotation' ? 'Quotation ' : 'Invoice ') + result.data.number + (record ? ' updated' : ' created'));
         if (kind === 'quotation') openQuotation(result.data.id); else openInvoice(result.data.id);
       } catch(err) { toast(err.message,true); }
     };
